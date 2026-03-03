@@ -30,22 +30,32 @@ simulation_app = SimulationApp({"headless": args.headless})
 
 # ── stdlib / third-party ────────────────────────────────────────────────────
 import os
+import sys
 import time
 import numpy as np
+
+# Log to file since Isaac Sim hijacks stdout
+_log = open("/tmp/box_move_test.log", "w", buffering=1)
+def log(msg):
+    _log.write(msg + "\n")
+    _log.flush()
+
+# Force stdout flush for remote logging
+print = lambda *a, **k: __builtins__["print"](*a, **k, flush=True) if isinstance(__builtins__, dict) else __import__("builtins").print(*a, **k, flush=True)
 
 # ── Isaac Sim 5.1.0 core API ─────────────────────────────────────────────────
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import DynamicCuboid, FixedCuboid
 from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.core.utils.rotations import euler_angles_to_quat
-from isaacsim.core.api.articulations import Articulation
+from isaacsim.core.prims import SingleArticulation as Articulation
 
 # ── Isaac Sim 5.1.0 URDF importer ────────────────────────────────────────────
 from isaacsim.asset.importer.urdf import _urdf
 
 # ── Isaac Sim 5.1.0 motion generation ────────────────────────────────────────
 # RMPFlow: NVIDIA's Riemannian Motion Policy — smooth, collision-aware
-from isaacsim.robot.motion_generation import RmpFlow, ArticulationMotionPolicy
+from isaacsim.robot_motion.motion_generation import RmpFlow, ArticulationMotionPolicy
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 REPO      = os.path.expanduser("~/orchestration_sim")
@@ -77,9 +87,13 @@ def load_arm(world: World) -> str:
     cfg.default_drive_strength         = 1e4
     cfg.default_position_drive_damping = 1e3
 
-    prim_path = "/World/rm75b"
-    urdf_interface.import_robot(URDF_PATH, prim_path, cfg)
-    print(f"✅ RM75-B imported → {prim_path}")
+    prim_path = "/RM75_B_with_Gripper"
+    import os
+    asset_root = os.path.dirname(URDF_PATH)
+    asset_name = os.path.basename(URDF_PATH)
+    robot = urdf_interface.parse_urdf(asset_root, asset_name, cfg)
+    urdf_interface.import_robot("", "rm75b_local.urdf", robot, cfg, prim_path)
+    log(f"✅ RM75-B imported → {prim_path}")
     return prim_path
 
 
@@ -91,7 +105,7 @@ def build_scene(world: World):
         position=[0.5, 0.0, TABLE_HEIGHT / 2],
         size=1.0,
         scale=[0.5, 0.7, TABLE_HEIGHT],
-        color=[0.3, 0.3, 0.3],
+        color=np.array([0.3, 0.3, 0.3]),
     ))
     world.scene.add(FixedCuboid(
         prim_path="/World/table",
@@ -99,14 +113,14 @@ def build_scene(world: World):
         position=[-0.4, 0.0, TABLE_HEIGHT / 2],
         size=1.0,
         scale=[0.5, 0.7, TABLE_HEIGHT],
-        color=[0.6, 0.4, 0.2],
+        color=np.array([0.6, 0.4, 0.2]),
     ))
     box = world.scene.add(DynamicCuboid(
         prim_path="/World/return_box",
         name="return_box",
         position=PICK_POSE_XYZ.tolist(),
         size=BOX_SIZE,
-        color=[0.9, 0.7, 0.1],
+        color=np.array([0.9, 0.7, 0.1]),
         mass=0.3,
     ))
     print("✅ Scene built: conveyor + table + return_box")
@@ -160,13 +174,13 @@ class BoxMoveStateMachine:
             if n > 60: self._transition("DONE", step)
 
         elif self.state == "DONE":
-            print(f"✅ [step {step}] Box successfully moved to inspection table.")
+            log(f"✅ [step {step}] Box successfully moved to inspection table.")
             return True
 
         return False
 
     def _transition(self, new_state: str, step: int):
-        print(f"   [step {step:>5}] {self.state} → {new_state}")
+        log(f"   [step {step:>5}] {self.state} → {new_state}")
         self.state            = new_state
         self.state_entry_step = step
 
@@ -179,10 +193,12 @@ class BoxMoveStateMachine:
 
     def _set_gripper(self, closed: bool):
         pos = GRIPPER_CLOSED_POS if closed else GRIPPER_OPEN_POS
+        # 13 DOFs: 7 arm + 6 gripper (Left_1, Left_2, Right_1, Right_2, Left_Support, Right_Support)
+        gripper_pos = np.array([pos[0], pos[0], pos[1], pos[1], pos[0], pos[1]])
         action = ArticulationAction(
             joint_positions=np.concatenate([
                 np.full(7, np.nan),  # leave arm joints alone
-                pos,
+                gripper_pos,         # 6 gripper joints
             ])
         )
         self.arm.apply_action(action)
@@ -198,10 +214,13 @@ def main():
     box           = build_scene(world)
     world.reset()
 
+    # Must step once before initialize in Isaac Sim 5.x
+    world.step(render=False)
     arm = Articulation(prim_path=arm_prim_path)
+    world.step(render=False)
     arm.initialize()
-    print(f"   DOF names : {arm.dof_names}")
-    print(f"   Total DOFs: {arm.num_dof}")
+    log(f"   DOF names : {arm.dof_names}")
+    log(f"   Total DOFs: {arm.num_dof}")
 
     sm        = BoxMoveStateMachine(arm=arm)
     step      = 0
@@ -209,8 +228,8 @@ def main():
     MAX_STEPS = 800 if not args.test else 50
 
     print("\n🚀 Starting box-move test (DR warehouse return — step 4: Item Extraction)")
-    print(f"   Pick  pose: {PICK_POSE_XYZ}")
-    print(f"   Place pose: {PLACE_POSE_XYZ}\n")
+    log(f"   Pick  pose: {PICK_POSE_XYZ}")
+    log(f"   Place pose: {PLACE_POSE_XYZ}\n")
 
     t0 = time.time()
 
@@ -219,7 +238,7 @@ def main():
 
         if step % 50 == 0:
             box_pos = box.get_world_pose()[0]
-            print(f"   [step {step:>4}] state={sm.state:<16} box_pos={np.round(box_pos, 3)}")
+            log(f"   [step {step:>4}] state={sm.state:<16} box_pos={np.round(box_pos, 3)}")
 
         done = sm.tick(step)
         step += 1
@@ -228,16 +247,16 @@ def main():
     final_box_pos = box.get_world_pose()[0]
     dist_to_goal  = np.linalg.norm(final_box_pos[:2] - PLACE_POSE_XYZ[:2])
 
-    print("\n── Test Results ────────────────────────────────────────────")
-    print(f"   Final box position : {np.round(final_box_pos, 3)}")
-    print(f"   Distance to goal   : {dist_to_goal:.4f} m")
-    print(f"   Final SM state     : {sm.state}")
-    print(f"   Steps elapsed      : {step}")
-    print(f"   Wall time          : {elapsed:.1f}s")
+    log("\n── Test Results ────────────────────────────────────────────")
+    log(f"   Final box position : {np.round(final_box_pos, 3)}")
+    log(f"   Distance to goal   : {dist_to_goal:.4f} m")
+    log(f"   Final SM state     : {sm.state}")
+    log(f"   Steps elapsed      : {step}")
+    log(f"   Wall time          : {elapsed:.1f}s")
 
     success = sm.state == "DONE"
-    print(f"\n{'✅ PASS' if success else '❌ FAIL'} — box_move test")
-    print("────────────────────────────────────────────────────────────\n")
+    log(f"\n{'✅ PASS' if success else '❌ FAIL'} — box_move test")
+    log("────────────────────────────────────────────────────────────\n")
 
     simulation_app.close()
     return 0 if success else 1

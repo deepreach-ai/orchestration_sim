@@ -245,7 +245,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/base_link.STL" />
+        <mesh filename="../gripper/meshes/base_link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.615686274509804 0.63921568627451 0.674509803921569 1" />
@@ -254,7 +254,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/base_link.STL" />
+        <mesh filename="../gripper/meshes/base_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -268,7 +268,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Left_1_Link.STL" />
+        <mesh filename="../gripper/meshes/Left_1_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.615686274509804 0.63921568627451 0.674509803921569 1" />
@@ -277,7 +277,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Left_1_Link.STL" />
+        <mesh filename="../gripper/meshes/Left_1_Link.STL" />
       </geometry>
     </collision>
   </link>
@@ -298,7 +298,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Left_Support_Link.STL" />
+        <mesh filename="../gripper/meshes/Left_Support_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.615686274509804 0.63921568627451 0.674509803921569 1" />
@@ -307,7 +307,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Left_Support_Link.STL" />
+        <mesh filename="../gripper/meshes/Left_Support_Link.STL" />
       </geometry>
     </collision>
   </link>
@@ -329,7 +329,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Left_2_Link.STL" />
+        <mesh filename="../gripper/meshes/Left_2_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.615686274509804 0.63921568627451 0.674509803921569 1" />
@@ -338,7 +338,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Left_2_Link.STL" />
+        <mesh filename="../gripper/meshes/Left_2_Link.STL" />
       </geometry>
     </collision>
   </link>
@@ -360,7 +360,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Right_2_Link.STL" />
+        <mesh filename="../gripper/meshes/Right_2_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.615686274509804 0.63921568627451 0.674509803921569 1" />
@@ -369,7 +369,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Right_2_Link.STL" />
+        <mesh filename="../gripper/meshes/Right_2_Link.STL" />
       </geometry>
     </collision>
   </link>
@@ -391,7 +391,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Right_1_Link.STL" />
+        <mesh filename="../gripper/meshes/Right_1_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.615686274509804 0.63921568627451 0.674509803921569 1" />
@@ -400,7 +400,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Right_1_Link.STL" />
+        <mesh filename="../gripper/meshes/Right_1_Link.STL" />
       </geometry>
     </collision>
   </link>
@@ -422,7 +422,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Right_Support_Link.STL" />
+        <mesh filename="../gripper/meshes/Right_Support_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.615686274509804 0.63921568627451 0.674509803921569 1" />
@@ -431,7 +431,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://crt_ctag2f90d_gripper_visualization/meshes/Right_Support_Link.STL" />
+        <mesh filename="../gripper/meshes/Right_Support_Link.STL" />
       </geometry>
     </collision>
   </link>
