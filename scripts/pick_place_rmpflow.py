@@ -35,6 +35,8 @@ from isaacsim.core.utils.types     import ArticulationAction
 from isaacsim.core.utils.rotations import euler_angles_to_quat
 from isaacsim.core.prims           import SingleArticulation
 from isaacsim.asset.importer.urdf  import _urdf
+import omni.physx
+from pxr import UsdPhysics, Gf
 
 # ── Log to file (Isaac Sim hijacks stdout) ────────────────────────────────────
 _log = open("/tmp/pick_place.log", "w", buffering=1)
@@ -145,8 +147,18 @@ class LulaController:
                 robot_description_path=descriptor_path,
                 urdf_path=urdf_path,
             )
+            # Provide multiple seeds covering pick/place workspace
+            # Confirmed reachable from workspace_scan
+            seeds = np.array([
+                [ 0.0,  0.23,  0.0,   0.664,  0.0,   1.677,  0.0],  # pick area
+                [-0.321, 0.414, -0.446, 1.041, -1.301, 1.271,  0.0],  # place area
+                [ 0.0, -0.009,  0.0,  -0.439,  0.0,   1.92,   0.0],  # home/up
+                [-0.704, 0.842, -0.163,-0.262, -0.761,  1.958,  0.0],  # left side
+                [ 0.0,   0.5,   0.0,  -1.2,    0.0,   0.8,    0.0],  # forward
+            ])
+            self._lula.set_default_cspace_seeds(seeds)
             self._use_lula = True
-            log("✅ Lula IK initialized with rm75b_descriptor.yaml")
+            log("✅ Lula IK initialized with 5 workspace seeds")
         except Exception as e:
             log(f"⚠️  Lula unavailable ({e}), using joint interpolation fallback")
 
@@ -181,6 +193,44 @@ class LulaController:
         action  = ArticulationAction(joint_positions=full)
         self.arm.apply_action(action)
 
+    def attach_box(self, box_prim_path: str):
+        """Rigidly attach box to end-effector (simulate grasp)."""
+        try:
+            from omni.physx.scripts import utils as physx_utils
+            stage = omni.usd.get_context().get_stage()
+            ee_path = self.arm.prim_path + "/link_7"
+            physx_utils.setRigidBodyEnabled(stage.GetPrimAtPath(box_prim_path), False)
+            log(f"   📦 Box attached to EE (physics disabled)")
+            self._attached_box = box_prim_path
+            self._box_local_offset = None
+        except Exception as e:
+            log(f"   attach error: {e}")
+
+    def detach_box(self):
+        """Release box from end-effector."""
+        try:
+            from omni.physx.scripts import utils as physx_utils
+            stage = omni.usd.get_context().get_stage()
+            if hasattr(self, '_attached_box') and self._attached_box:
+                physx_utils.setRigidBodyEnabled(stage.GetPrimAtPath(self._attached_box), True)
+                log(f"   📦 Box detached (physics re-enabled)")
+                self._attached_box = None
+        except Exception as e:
+            log(f"   detach error: {e}")
+
+    def move_box_with_ee(self, box):
+        """If box is attached, teleport it to current EE position."""
+        if hasattr(self, '_attached_box') and self._attached_box:
+            try:
+                stage = omni.usd.get_context().get_stage()
+                from isaacsim.core.utils.xforms import get_world_pose
+                # get EE world position
+                ee_prim_path = self.arm.prim_path + "/link_7"
+                pos, _ = get_world_pose(ee_prim_path)
+                box.set_world_pose(position=pos)
+            except Exception as e:
+                pass
+
     def set_gripper(self, closed: bool):
         current = self.arm.get_joint_positions()
         full    = current.copy()
@@ -207,9 +257,11 @@ class PickPlaceStateMachine:
         "HOME_FINAL":    60,
     }
 
-    def __init__(self, ctrl: LulaController):
+    def __init__(self, ctrl: LulaController, box=None, box_prim_path=None):
         self.ctrl             = ctrl
-        self.state            = "IDLE"
+        self._box             = box
+        self._box_prim_path   = box_prim_path
+        self.state            = "IDLE" 
         self.state_entry_step = 0
         self._ee_quat         = euler_angles_to_quat(np.array([np.pi, 0.0, 0.0]))
 
@@ -234,6 +286,9 @@ class PickPlaceStateMachine:
 
         elif self.state == "GRASP":
             self.ctrl.set_gripper(closed=True)
+            if n == 1:
+                self.ctrl.attach_box(self._box_prim_path)
+            self.ctrl.move_box_with_ee(self._box)
             if n > self.DWELL["GRASP"]: self._go("LIFT", step)
 
         elif self.state == "LIFT":
@@ -250,6 +305,8 @@ class PickPlaceStateMachine:
 
         elif self.state == "RELEASE":
             self.ctrl.set_gripper(closed=False)
+            if n == 1:
+                self.ctrl.detach_box()
             if n > self.DWELL["RELEASE"]: self._go("HOME_FINAL", step)
 
         elif self.state == "HOME_FINAL":
@@ -284,7 +341,7 @@ def main():
     log(f"   DOFs ({arm.num_dof}): {arm.dof_names}")
 
     ctrl = LulaController(arm=arm, urdf_path=URDF_PATH, ee_frame="link_7")
-    sm   = PickPlaceStateMachine(ctrl=ctrl)
+    sm   = PickPlaceStateMachine(ctrl=ctrl, box=box, box_prim_path='/World/box')
 
     log("\n🚀 Pick-place with RMPFlow/Lula IK")
     log(f"   Pick  → {PICK_XYZ}")
@@ -301,6 +358,7 @@ def main():
             box_pos = box.get_world_pose()[0]
             log(f"   [step {step:>4}] {sm.state:<18} box={np.round(box_pos, 3)}")
 
+        sm.ctrl.move_box_with_ee(box)
         done = sm.tick(step)
         step += 1
 
