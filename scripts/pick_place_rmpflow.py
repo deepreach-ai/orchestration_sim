@@ -54,8 +54,9 @@ PICK_XYZ   = np.array([0.45,  0.0,  TABLE_H + BOX_HALF + 0.01])
 PLACE_XYZ  = np.array([0.45, -0.45, TABLE_H + BOX_HALF + 0.01])
 HOVER_Z    = 0.18   # hover height above target
 
-# Joint home position (arm straight up, gripper open)
-HOME_JOINTS = np.array([0.0, -0.3, 0.0, -1.4, 0.0, 1.1, 0.0])
+# Joint home position — arm reaching forward over table, not leaning back
+# joint_2 negative = lean forward, joint_4 negative = elbow down
+HOME_JOINTS = np.array([0.0, 0.5, 0.0, -1.2, 0.0, 0.8, 0.0])
 
 # Gripper: 13 DOFs total (7 arm + 6 gripper fingers)
 N_ARM_DOFS = 7
@@ -134,15 +135,15 @@ class LulaController:
         self._lula    = None
         self._use_lula = False
 
+        descriptor_path = os.path.join(REPO, "configs/rm75b_descriptor.yaml")
         try:
             from isaacsim.robot_motion.motion_generation.lula import LulaKinematicsSolver
-            # Build robot description from URDF
             self._lula = LulaKinematicsSolver(
-                robot_description_path=urdf_path,
+                robot_description_path=descriptor_path,
                 urdf_path=urdf_path,
             )
             self._use_lula = True
-            log("✅ Lula IK initialized")
+            log("✅ Lula IK initialized with rm75b_descriptor.yaml")
         except Exception as e:
             log(f"⚠️  Lula unavailable ({e}), using joint interpolation fallback")
 

@@ -1,0 +1,79 @@
+# RM75-B Robot Descriptor for Lula IK / RMPFlow
+# Generated from rm75b_local.urdf joint limits
+# Isaac Sim 5.1.0 compatible
+
+api_version: 1.0
+
+# C-space (joint space) definition — arm joints only (7 DOF, exclude gripper)
+cspace:
+  - joint_1
+  - joint_2
+  - joint_3
+  - joint_4
+  - joint_5
+  - joint_6
+  - joint_7
+
+root_link: base_link
+end_effector_frame: link_7
+
+# Default home position (arm upright, ready pose)
+default_q: [0.0, -0.3, 0.0, -1.4, 0.0, 1.1, 0.0]
+
+# Joint limits from URDF
+cspace_lower_limit: [-3.106, -2.2689, -3.106, -2.356, -3.106, -2.234, -6.28]
+cspace_upper_limit: [ 3.106,  2.2689,  3.106,  2.356,  3.106,  2.234,  6.28]
+
+# Collision spheres for self-collision avoidance
+collision_spheres:
+  - link: base_link
+    spheres:
+      - center: [0, 0, 0.12]
+        radius: 0.08
+
+  - link: link_1
+    spheres:
+      - center: [0, 0, 0.0]
+        radius: 0.07
+      - center: [0, -0.06, 0.0]
+        radius: 0.06
+
+  - link: link_2
+    spheres:
+      - center: [0, -0.07, 0.0]
+        radius: 0.06
+      - center: [0, -0.15, 0.0]
+        radius: 0.055
+      - center: [0, -0.22, 0.0]
+        radius: 0.055
+
+  - link: link_3
+    spheres:
+      - center: [0, 0, 0.0]
+        radius: 0.055
+      - center: [0, -0.06, 0.0]
+        radius: 0.05
+
+  - link: link_4
+    spheres:
+      - center: [0, -0.07, 0.0]
+        radius: 0.05
+      - center: [0, -0.14, 0.0]
+        radius: 0.045
+
+  - link: link_5
+    spheres:
+      - center: [0, 0, 0.0]
+        radius: 0.045
+
+  - link: link_6
+    spheres:
+      - center: [0, -0.04, 0.0]
+        radius: 0.04
+      - center: [0, -0.10, 0.0]
+        radius: 0.04
+
+  - link: link_7
+    spheres:
+      - center: [0, 0, -0.02]
+        radius: 0.035
