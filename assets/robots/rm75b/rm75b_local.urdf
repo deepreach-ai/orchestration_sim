@@ -286,7 +286,7 @@
     <parent link="gripper_base_link" />
     <child link="Left_1_Link" />
     <axis xyz="0 0 -1" />
-    <limit lower="-0.91" upper="0" effort="10" velocity="10" />
+    <limit lower="-0.5" upper="0.5" effort="5" velocity="1.0" />
   </joint>
 
   <link name="Left_Support_Link">
@@ -311,7 +311,7 @@
       </geometry>
     </collision>
   </link>
-  <joint name="Left_Support_Joint" type="revolute">
+  <joint name="Left_Support_Joint" type="fixed">
     <origin xyz="0.040359 0.037365 0" rpy="0 0 0" />
     <parent link="Left_1_Link" />
     <child link="Left_Support_Link" />
@@ -347,7 +347,7 @@
     <parent link="gripper_base_link" />
     <child link="Left_2_Link" />
     <axis xyz="0 0 -1" />
-    <limit lower="0" upper="0" effort="0" velocity="0" />
+    <limit lower="-0.5" upper="0.5" effort="5" velocity="1.0" />
     <mimic joint="Left_1_Joint" multiplier="1" offset="0" />
   </joint>
 
@@ -378,7 +378,7 @@
     <parent link="gripper_base_link" />
     <child link="Right_2_Link" />
     <axis xyz="0 0 1" />
-    <limit lower="0" upper="0" effort="0" velocity="0" />
+    <limit lower="-0.5" upper="0.5" effort="5" velocity="1.0" />
     <mimic joint="Left_1_Joint" multiplier="-1" offset="0" />
   </joint>
 
@@ -409,7 +409,7 @@
     <parent link="gripper_base_link" />
     <child link="Right_1_Link" />
     <axis xyz="0 0 1" />
-    <limit lower="0" upper="0" effort="0" velocity="0" />
+    <limit lower="-0.5" upper="0.5" effort="5" velocity="1.0" />
     <mimic joint="Left_1_Joint" multiplier="-1" offset="0" />
   </joint>
 
@@ -435,7 +435,7 @@
       </geometry>
     </collision>
   </link>
-  <joint name="Right_Support_Joint" type="revolute">
+  <joint name="Right_Support_Joint" type="fixed">
     <origin xyz="0.040359 0.037365 0" rpy="0 0 0" />
     <parent link="Right_1_Link" />
     <child link="Right_Support_Link" />

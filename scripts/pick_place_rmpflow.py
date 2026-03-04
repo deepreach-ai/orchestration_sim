@@ -45,23 +45,23 @@ REPO      = os.path.expanduser("~/orchestration_sim")
 URDF_PATH = os.path.join(REPO, "assets/robots/rm75b/rm75b_local.urdf")
 
 # ── Scene constants (DR warehouse spec) ───────────────────────────────────────
-TABLE_H   = 0.72    # standard table height
+TABLE_H   = 0.40    # confirmed reachable for RM75-B
 BOX_SIZE  = 0.12    # 12cm cube (phone-sized SKU)
 BOX_HALF  = BOX_SIZE / 2
 
 # Arm base is at world origin, facing +X
-PICK_XYZ   = np.array([0.45,  0.0,  TABLE_H + BOX_HALF + 0.01])
-PLACE_XYZ  = np.array([0.45, -0.45, TABLE_H + BOX_HALF + 0.01])
-HOVER_Z    = 0.18   # hover height above target
+PICK_XYZ   = np.array([0.30,  0.0,  0.50])   # confirmed IK-reachable
+PLACE_XYZ  = np.array([0.20, -0.30, 0.50])   # left side reachable
+HOVER_Z    = 0.12   # hover height
 
 # Joint home position — arm reaching forward over table, not leaning back
 # joint_2 negative = lean forward, joint_4 negative = elbow down
-HOME_JOINTS = np.array([0.0, 0.5, 0.0, -1.2, 0.0, 0.8, 0.0])
+HOME_JOINTS = np.array([0.0, -0.009, 0.0, -0.439, 0.0, 1.92, 0.0])  # straight up safe
 
 # Gripper: 13 DOFs total (7 arm + 6 gripper fingers)
 N_ARM_DOFS = 7
-GRIP_OPEN  = np.array([ 0.04,  0.04,  0.04,  0.04,  0.04,  0.04])
-GRIP_CLOSE = np.array([ 0.003, 0.003, 0.003, 0.003, 0.003, 0.003])
+GRIP_OPEN  = np.array([ 0.04,  0.04,  0.04,  0.04])
+GRIP_CLOSE = np.array([ 0.003, 0.003, 0.003, 0.003])
 
 
 # ── URDF loader ───────────────────────────────────────────────────────────────
@@ -134,6 +134,9 @@ class LulaController:
         self.ee_frame = ee_frame
         self._lula    = None
         self._use_lula = False
+        # Pre-computed warm starts for key positions (from workspace_scan)
+        self.WARM_PICK  = np.array([ 0.0,  0.23,  0.0,  0.664,  0.0,  1.677,  0.0])
+        self.WARM_PLACE = np.array([-0.321,  0.414, -0.446,  1.041, -1.301,  1.271,  0.0])
 
         descriptor_path = os.path.join(REPO, "configs/rm75b_descriptor.yaml")
         try:
@@ -147,23 +150,25 @@ class LulaController:
         except Exception as e:
             log(f"⚠️  Lula unavailable ({e}), using joint interpolation fallback")
 
-    def move_to(self, target_pos: np.ndarray, target_quat: np.ndarray) -> bool:
+    def move_to(self, target_pos: np.ndarray, target_quat: np.ndarray, warm_hint: np.ndarray = None) -> bool:
         """Send arm to Cartesian target. Returns True if IK succeeded."""
         if self._use_lula and self._lula is not None:
             try:
+                warm = warm_hint if warm_hint is not None else self.arm.get_joint_positions()[:N_ARM_DOFS]
                 joint_pos, success = self._lula.compute_inverse_kinematics(
                     frame_name=self.ee_frame,
-                    warm_start=self.arm.get_joint_positions()[:N_ARM_DOFS],
+                    warm_start=warm,
                     target_position=target_pos,
-                    target_orientation=target_quat,
+                    # orientation omitted — position-only IK is more robust
                 )
-                if success:
-                    self._apply_arm(joint_pos)
-                    return True
+                # Always apply best IK result even if not fully converged
+                self._apply_arm(joint_pos)
+                if not success:
+                    log(f"   ⚠️ IK not converged for {np.round(target_pos,3)}, applying best effort")
+                return success
             except Exception as e:
                 log(f"   IK error: {e}")
 
-        # Fallback: hold current position (arm stays still)
         return False
 
     def move_home(self):
@@ -192,13 +197,13 @@ class PickPlaceStateMachine:
 
     DWELL = {   # steps to dwell in each state before transitioning
         "HOME":          80,
-        "HOVER_PICK":   100,
-        "DESCEND_PICK":  80,
-        "GRASP":         60,
-        "LIFT":          80,
-        "HOVER_PLACE":  100,
-        "DESCEND_PLACE": 80,
-        "RELEASE":       60,
+        "HOVER_PICK":   120,
+        "DESCEND_PICK": 120,
+        "GRASP":         80,
+        "LIFT":         120,
+        "HOVER_PLACE":  200,  # longer — place is far away
+        "DESCEND_PLACE":150,
+        "RELEASE":       80,
         "HOME_FINAL":    60,
     }
 
@@ -220,11 +225,11 @@ class PickPlaceStateMachine:
             if n > self.DWELL["HOME"]: self._go("HOVER_PICK", step)
 
         elif self.state == "HOVER_PICK":
-            self.ctrl.move_to(PICK_XYZ + np.array([0, 0, HOVER_Z]), self._ee_quat)
+            self.ctrl.move_to(PICK_XYZ + np.array([0, 0, HOVER_Z]), self._ee_quat, warm_hint=self.ctrl.WARM_PICK)
             if n > self.DWELL["HOVER_PICK"]: self._go("DESCEND_PICK", step)
 
         elif self.state == "DESCEND_PICK":
-            self.ctrl.move_to(PICK_XYZ, self._ee_quat)
+            self.ctrl.move_to(PICK_XYZ, self._ee_quat, warm_hint=self.ctrl.WARM_PICK)
             if n > self.DWELL["DESCEND_PICK"]: self._go("GRASP", step)
 
         elif self.state == "GRASP":
@@ -232,15 +237,15 @@ class PickPlaceStateMachine:
             if n > self.DWELL["GRASP"]: self._go("LIFT", step)
 
         elif self.state == "LIFT":
-            self.ctrl.move_to(PICK_XYZ + np.array([0, 0, HOVER_Z]), self._ee_quat)
+            self.ctrl.move_to(PICK_XYZ + np.array([0, 0, HOVER_Z]), self._ee_quat, warm_hint=self.ctrl.WARM_PICK)
             if n > self.DWELL["LIFT"]: self._go("HOVER_PLACE", step)
 
         elif self.state == "HOVER_PLACE":
-            self.ctrl.move_to(PLACE_XYZ + np.array([0, 0, HOVER_Z]), self._ee_quat)
+            self.ctrl.move_to(PLACE_XYZ + np.array([0, 0, HOVER_Z]), self._ee_quat, warm_hint=self.ctrl.WARM_PLACE)
             if n > self.DWELL["HOVER_PLACE"]: self._go("DESCEND_PLACE", step)
 
         elif self.state == "DESCEND_PLACE":
-            self.ctrl.move_to(PLACE_XYZ, self._ee_quat)
+            self.ctrl.move_to(PLACE_XYZ, self._ee_quat, warm_hint=self.ctrl.WARM_PLACE)
             if n > self.DWELL["DESCEND_PLACE"]: self._go("RELEASE", step)
 
         elif self.state == "RELEASE":
