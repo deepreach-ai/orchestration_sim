@@ -355,16 +355,32 @@ class ArmLoader:
 
         # Compatible with Isaac Sim 5.1.0 importer API:
         # parse URDF, then import into the current active stage at prim_path.
-        asset_root = os.path.dirname(cls.URDF_PATH)
-        asset_name = os.path.basename(cls.URDF_PATH)
-        robot = ui.parse_urdf(asset_root, asset_name, cfg)
-        ui.import_robot("", asset_name, robot, cfg, prim_path)
+        asset_root  = os.path.dirname(cls.URDF_PATH)
+        asset_name  = os.path.basename(cls.URDF_PATH)
+        robot       = ui.parse_urdf(asset_root, asset_name, cfg)
+
+        # Import into the current stage using stage URL, then move to prim_path.
+        stage       = omni.usd.get_context().get_stage()
+        stage_url   = stage.GetRootLayer().identifier
+        created_prim_path = ui.import_robot(asset_root, asset_name, robot, cfg, stage_url)
 
         # Translate and rotate the base prim in USD
-        stage = omni.usd.get_context().get_stage()
-        prim  = stage.GetPrimAtPath(prim_path)
+        prim  = stage.GetPrimAtPath(created_prim_path)
         if not prim.IsValid():
-            raise RuntimeError(f"URDF import did not create prim at {prim_path}")
+            raise RuntimeError(f"URDF import returned '{created_prim_path}', but prim not found")
+
+        # If importer didn't create at desired path, move it under prim_path
+        if created_prim_path != prim_path:
+            import omni.kit.commands
+            # Remove existing destination if any (stale from previous runs)
+            existing = stage.GetPrimAtPath(prim_path)
+            if existing and existing.IsValid():
+                omni.kit.commands.execute("DeletePrims", paths=[prim_path])
+            omni.kit.commands.execute("MovePrim", path_from=created_prim_path, path_to=prim_path)
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                raise RuntimeError(f"Failed to move prim to {prim_path}")
+
         xform = UsdGeom.Xformable(prim)
         xform.ClearXformOpOrder()
         xform.AddTranslateOp().Set(Gf.Vec3d(*base_xyz.tolist()))
