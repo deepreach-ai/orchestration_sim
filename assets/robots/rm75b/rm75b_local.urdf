@@ -312,12 +312,11 @@
     </collision>
   </link>
   <joint name="Left_Support_Joint" type="fixed">
+    <!-- mimic removed: PhysX does not support URDF mimic joints.
+         Left_Support_Link is structurally fixed relative to Left_1_Link. -->
     <origin xyz="0.040359 0.037365 0" rpy="0 0 0" />
     <parent link="Left_1_Link" />
     <child link="Left_Support_Link" />
-    <axis xyz="0 0 -1" />
-    <limit lower="0" upper="0" effort="0" velocity="0" />
-    <mimic joint="Left_1_Joint" multiplier="-1" offset="0" />
   </joint>
 
   <link name="Left_2_Link">
@@ -342,13 +341,12 @@
       </geometry>
     </collision>
   </link>
-  <joint name="Left_2_Joint" type="revolute">
+  <joint name="Left_2_Joint" type="fixed">
+    <!-- mimic removed: PhysX does not support URDF mimic joints.
+         Converted to fixed — Left_2_Link tracks Left_1_Link at neutral pose. -->
     <origin xyz="0.016 0 0.121" rpy="1.5708 0 0" />
     <parent link="gripper_base_link" />
     <child link="Left_2_Link" />
-    <axis xyz="0 0 -1" />
-    <limit lower="-0.5" upper="0.5" effort="5" velocity="1.0" />
-    <mimic joint="Left_1_Joint" multiplier="1" offset="0" />
   </joint>
 
   <link name="Right_2_Link">
@@ -373,13 +371,12 @@
       </geometry>
     </collision>
   </link>
-  <joint name="Right_2_Joint" type="revolute">
+  <joint name="Right_2_Joint" type="fixed">
+    <!-- mimic removed: PhysX does not support URDF mimic joints.
+         Converted to fixed — symmetric to Left_2_Joint. -->
     <origin xyz="-0.016 0 0.121" rpy="-1.5708 3.1416 0" />
     <parent link="gripper_base_link" />
     <child link="Right_2_Link" />
-    <axis xyz="0 0 1" />
-    <limit lower="-0.5" upper="0.5" effort="5" velocity="1.0" />
-    <mimic joint="Left_1_Joint" multiplier="-1" offset="0" />
   </joint>
 
   <link name="Right_1_Link">
@@ -404,13 +401,12 @@
       </geometry>
     </collision>
   </link>
-  <joint name="Right_1_Joint" type="revolute">
+  <joint name="Right_1_Joint" type="fixed">
+    <!-- mimic removed: PhysX does not support URDF mimic joints.
+         Converted to fixed — Right finger mirrors Left at neutral pose. -->
     <origin xyz="-0.030141 0 0.10415" rpy="-1.5708 3.1416 0" />
     <parent link="gripper_base_link" />
     <child link="Right_1_Link" />
-    <axis xyz="0 0 1" />
-    <limit lower="-0.5" upper="0.5" effort="5" velocity="1.0" />
-    <mimic joint="Left_1_Joint" multiplier="-1" offset="0" />
   </joint>
 
   <link name="Right_Support_Link">
@@ -436,12 +432,10 @@
     </collision>
   </link>
   <joint name="Right_Support_Joint" type="fixed">
+    <!-- mimic removed: PhysX does not support URDF mimic joints. -->
     <origin xyz="0.040359 0.037365 0" rpy="0 0 0" />
     <parent link="Right_1_Link" />
     <child link="Right_Support_Link" />
-    <axis xyz="0 0 -1" />
-    <limit lower="0" upper="0" effort="0" velocity="0" />
-    <mimic joint="Left_1_Joint" multiplier="-1" offset="0" />
   </joint>
 
 </robot>
