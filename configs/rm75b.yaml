@@ -3,8 +3,8 @@ dof: 7
 manufacturer: "REALMAN Robotics"
 
 isaac_sim:
-  usd_path: "assets/usd/realman_rm75b.usd"  # Placeholder, might not exist yet
-  urdf_path: "robots/rm75b/RM75-B.urdf"
+  usd_path: "assets/robots/rm75b/rm75b.usd"          # verified: exists at this path
+  urdf_path: "assets/robots/rm75b/rm75b_local.urdf"  # mesh paths already fixed by setup.sh
   ee_frame: "link_7"
   prim_path: "/World/REALMAN_RM75B"
 
