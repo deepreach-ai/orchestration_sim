@@ -349,7 +349,11 @@ class ArmLoader:
         prim = None
         try:
             prim = stage.DefinePrim(prim_path, "Xform")
-            prim.GetReferences().AddReference(cls.USD_PATH)
+            # Prefer resolved USD asset; specify the root prim inside the asset
+            # to avoid relying on defaultPrim.
+            refs = prim.GetReferences()
+            refs.ClearReferences()
+            refs.AddReference(cls.USD_PATH, "/RM75_B_with_Gripper")
         except Exception:
             ui  = _urdf.acquire_urdf_interface()
             cfg = _urdf.ImportConfig()
