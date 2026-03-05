@@ -31,10 +31,15 @@ Layout (top-down, units = metres)
   Handover zone: x=0.0, y=0.0, z=0.55  (between the two arm bases)
 
 Run (standalone demo, single full cycle):
+  ~/isaacsim/python.sh scripts/run_demo.py
+
+  Or inline:
   ~/isaacsim/python.sh -c "
-  import sys; sys.path.insert(0,'~/orchestration_sim')
-  from orchestration.task_manager import TaskManager
-  TaskManager.run_demo()
+import sys, os; sys.path.insert(0, os.path.expanduser('~/orchestration_sim'))
+from isaacsim import SimulationApp          # SimulationApp MUST come first
+sim_app = SimulationApp({'headless': True})
+from orchestration.task_manager import TaskManager
+TaskManager.run_demo(headless=True, n_cycles=2)
   "
 """
 

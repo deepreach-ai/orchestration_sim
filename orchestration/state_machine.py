@@ -33,31 +33,22 @@ from enum import Enum, auto
 from typing import Callable, Optional
 
 import numpy as np
-from isaacsim.core.utils.rotations import euler_angles_to_quat
 
-# ── Re-use the tuned constants from pick_place_rmpflow ───────────────────────
-# Import them so there is a single source of truth.
-# If the script is not on sys.path, fall back to sensible defaults.
-try:
-    import sys, os
-    sys.path.insert(0, os.path.expanduser("~/orchestration_sim/scripts"))
-    from pick_place_rmpflow import (
-        PICK_XYZ, PLACE_XYZ, HOVER_Z,
-        HOME_JOINTS, N_ARM_DOFS,
-        GRIP_OPEN, GRIP_CLOSE,
-        LulaController,
-    )
-    _IMPORTED_FROM_SCRIPT = True
-except ImportError:
-    _IMPORTED_FROM_SCRIPT = False
-    # ── Fallback constants (copy of confirmed-working values) ─────────────────
-    PICK_XYZ    = np.array([0.30,  0.0,  0.50])
-    PLACE_XYZ   = np.array([0.20, -0.30, 0.50])
-    HOVER_Z     = 0.12
-    HOME_JOINTS = np.array([0.0, -0.009, 0.0, -0.439, 0.0, 1.92, 0.0])
-    N_ARM_DOFS  = 7
-    GRIP_OPEN   = np.array([0.04,  0.04,  0.04,  0.04])
-    GRIP_CLOSE  = np.array([0.003, 0.003, 0.003, 0.003])
+# NOTE: isaacsim.* imports are intentionally deferred to inside methods/
+# __init__ bodies. SimulationApp must be instantiated before any isaacsim
+# module is imported — importing at module load time causes:
+#   ModuleNotFoundError: No module named 'isaacsim.core'
+# See: Isaac Sim Carbonite framework requirement.
+
+# ── Fallback constants (copy of confirmed-working values from pick_place_rmpflow)
+# NOT imported from the script at module level — that would pull in isaacsim too.
+PICK_XYZ    = np.array([0.30,  0.0,  0.50])
+PLACE_XYZ   = np.array([0.20, -0.30, 0.50])
+HOVER_Z     = 0.12
+HOME_JOINTS = np.array([0.0, -0.009, 0.0, -0.439, 0.0, 1.92, 0.0])
+N_ARM_DOFS  = 7
+GRIP_OPEN   = np.array([0.04,  0.04,  0.04,  0.04])
+GRIP_CLOSE  = np.array([0.003, 0.003, 0.003, 0.003])
 
 
 # ── Logger (writes to Isaac Sim-safe logger, not stdout) ─────────────────────
@@ -67,6 +58,12 @@ logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
 def _log(msg: str):
     logger.info(msg)
     print(msg, flush=True)
+
+
+def _ee_quat_default() -> np.ndarray:
+    """Lazy import of euler_angles_to_quat — only safe after SimulationApp()."""
+    from isaacsim.core.utils.rotations import euler_angles_to_quat
+    return euler_angles_to_quat(np.array([np.pi, 0.0, 0.0]))
 
 
 # ── ArmRole — used by DualArmSM to distinguish arms ──────────────────────────
@@ -166,7 +163,7 @@ class SingleArmSM:
         self.pick_xyz       = pick_xyz
         self.place_xyz      = place_xyz
         self.hover_z        = hover_z
-        self._ee_quat       = euler_angles_to_quat(np.array([np.pi, 0.0, 0.0]))
+        self._ee_quat       = _ee_quat_default()
 
         self.dwell = dict(_DEFAULT_DWELL)
         if dwell_override:
@@ -348,7 +345,7 @@ class DualArmSM:
         # Default handover zone: midpoint between pick and place, raised
         self._handover_xyz = handover_xyz if handover_xyz is not None else np.array([0.0, 0.0, 0.55])
 
-        self._ee_quat = euler_angles_to_quat(np.array([np.pi, 0.0, 0.0]))
+        self._ee_quat = _ee_quat_default()
         self.hover_z  = hover_z
 
         self.dwell = dict(_DEFAULT_DWELL)
@@ -466,7 +463,7 @@ class _ArmFSM:
         self.hover_z        = hover_z
         self.dwell          = dwell
         self._on_transition = on_transition
-        self._ee_quat       = euler_angles_to_quat(np.array([np.pi, 0.0, 0.0]))
+        self._ee_quat       = _ee_quat_default()
 
         self.state                 = ArmState.IDLE
         self.state_entry_step      = 0
