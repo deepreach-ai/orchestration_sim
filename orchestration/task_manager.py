@@ -327,6 +327,7 @@ class ArmLoader:
     """
 
     URDF_PATH = os.path.join(REPO, "assets/robots/rm75b/rm75b_local.urdf")
+    USD_PATH  = os.path.join(REPO, "assets/robots/rm75b/rm75b.usd")
 
     @classmethod
     def load_both(cls, world) -> Tuple:
@@ -340,46 +341,40 @@ class ArmLoader:
 
     @classmethod
     def _load_one(cls, prim_path: str, base_xyz: np.ndarray, yaw_deg: float) -> str:
-        """Import one RM75-B URDF at the given world position and yaw."""
         from isaacsim.asset.importer.urdf import _urdf
-        from pxr import UsdGeom, Gf
+        from pxr import UsdGeom, Gf, Sdf
         import omni.usd
 
-        ui  = _urdf.acquire_urdf_interface()
-        cfg = _urdf.ImportConfig()
-        cfg.merge_fixed_joints             = False
-        cfg.fix_base                       = True
-        cfg.default_drive_type             = _urdf.UrdfJointTargetType.JOINT_DRIVE_POSITION
-        cfg.default_drive_strength         = 8e3    # confirmed stable from pick_place_rmpflow
-        cfg.default_position_drive_damping = 8e2
-
-        # Compatible with Isaac Sim 5.1.0 importer API:
-        # parse URDF, then import into the current active stage at prim_path.
-        asset_root  = os.path.dirname(cls.URDF_PATH)
-        asset_name  = os.path.basename(cls.URDF_PATH)
-        robot       = ui.parse_urdf(asset_root, asset_name, cfg)
-
-        # Import into the current stage using stage URL, then move to prim_path.
-        stage       = omni.usd.get_context().get_stage()
-        stage_url   = stage.GetRootLayer().identifier
-        created_prim_path = ui.import_robot(asset_root, asset_name, robot, cfg, stage_url)
-
-        # Translate and rotate the base prim in USD
-        prim  = stage.GetPrimAtPath(created_prim_path)
-        if not prim.IsValid():
-            raise RuntimeError(f"URDF import returned '{created_prim_path}', but prim not found")
-
-        # If importer didn't create at desired path, move it under prim_path
-        if created_prim_path != prim_path:
-            import omni.kit.commands
-            # Remove existing destination if any (stale from previous runs)
-            existing = stage.GetPrimAtPath(prim_path)
-            if existing and existing.IsValid():
-                omni.kit.commands.execute("DeletePrims", paths=[prim_path])
-            omni.kit.commands.execute("MovePrim", path_from=created_prim_path, path_to=prim_path)
-            prim = stage.GetPrimAtPath(prim_path)
+        stage = omni.usd.get_context().get_stage()
+        prim = None
+        try:
+            prim = stage.DefinePrim(prim_path, "Xform")
+            prim.GetReferences().AddReference(cls.USD_PATH)
+        except Exception:
+            ui  = _urdf.acquire_urdf_interface()
+            cfg = _urdf.ImportConfig()
+            cfg.merge_fixed_joints             = False
+            cfg.fix_base                       = True
+            cfg.default_drive_type             = _urdf.UrdfJointTargetType.JOINT_DRIVE_POSITION
+            cfg.default_drive_strength         = 8e3
+            cfg.default_position_drive_damping = 8e2
+            asset_root  = os.path.dirname(cls.URDF_PATH)
+            asset_name  = os.path.basename(cls.URDF_PATH)
+            robot       = ui.parse_urdf(asset_root, asset_name, cfg)
+            stage_url   = stage.GetRootLayer().identifier
+            created_prim_path = ui.import_robot(asset_root, asset_name, robot, cfg, stage_url)
+            prim  = stage.GetPrimAtPath(created_prim_path)
             if not prim.IsValid():
-                raise RuntimeError(f"Failed to move prim to {prim_path}")
+                raise RuntimeError(f"URDF import returned '{created_prim_path}', but prim not found")
+            if created_prim_path != prim_path:
+                import omni.kit.commands
+                existing = stage.GetPrimAtPath(prim_path)
+                if existing and existing.IsValid():
+                    omni.kit.commands.execute("DeletePrims", paths=[prim_path])
+                omni.kit.commands.execute("MovePrim", path_from=created_prim_path, path_to=prim_path)
+                prim = stage.GetPrimAtPath(prim_path)
+                if not prim.IsValid():
+                    raise RuntimeError(f"Failed to move prim to {prim_path}")
 
         xform = UsdGeom.Xformable(prim)
         xform.ClearXformOpOrder()
