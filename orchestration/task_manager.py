@@ -353,9 +353,12 @@ class ArmLoader:
         cfg.default_drive_strength         = 8e3    # confirmed stable from pick_place_rmpflow
         cfg.default_position_drive_damping = 8e2
 
-        # Import directly into the current (active) USD stage to avoid
-        # creating an in-memory stage inside the URDF importer.
-        ui.import_robot(cls.URDF_PATH, prim_path, cfg)
+        # Compatible with Isaac Sim 5.1.0 importer API:
+        # parse URDF, then import into the current active stage at prim_path.
+        asset_root = os.path.dirname(cls.URDF_PATH)
+        asset_name = os.path.basename(cls.URDF_PATH)
+        robot = ui.parse_urdf(asset_root, asset_name, cfg)
+        ui.import_robot("", asset_name, robot, cfg, prim_path)
 
         # Translate and rotate the base prim in USD
         stage = omni.usd.get_context().get_stage()
