@@ -223,7 +223,14 @@ class LulaController:
     def set_gripper(self, closed: bool):
         current = self.arm.get_joint_positions()
         full    = current.copy()
-        full[N_ARM_DOFS:] = GRIP_CLOSE if closed else GRIP_OPEN
+        n_grip  = full.shape[0] - N_ARM_DOFS
+        target  = GRIP_CLOSE if closed else GRIP_OPEN
+        if target.shape[0] != n_grip:
+            if target.shape[0] < n_grip:
+                target = np.pad(target, (0, n_grip - target.shape[0]), mode='edge')
+            else:
+                target = target[:n_grip]
+        full[N_ARM_DOFS:] = target
         self.arm.apply_action(ArticulationAction(joint_positions=full))
 
 
