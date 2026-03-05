@@ -353,19 +353,19 @@ class ArmLoader:
         cfg.default_drive_strength         = 8e3    # confirmed stable from pick_place_rmpflow
         cfg.default_position_drive_damping = 8e2
 
-        asset_root = os.path.dirname(cls.URDF_PATH)
-        asset_name = os.path.basename(cls.URDF_PATH)
-        robot = ui.parse_urdf(asset_root, asset_name, cfg)
-        ui.import_robot("", asset_name, robot, cfg, prim_path)
+        # Import directly into the current (active) USD stage to avoid
+        # creating an in-memory stage inside the URDF importer.
+        ui.import_robot(cls.URDF_PATH, prim_path, cfg)
 
         # Translate and rotate the base prim in USD
         stage = omni.usd.get_context().get_stage()
         prim  = stage.GetPrimAtPath(prim_path)
-        if prim.IsValid():
-            xform = UsdGeom.Xformable(prim)
-            xform.ClearXformOpOrder()
-            xform.AddTranslateOp().Set(Gf.Vec3d(*base_xyz.tolist()))
-            xform.AddRotateZOp().Set(float(yaw_deg))
+        if not prim.IsValid():
+            raise RuntimeError(f"URDF import did not create prim at {prim_path}")
+        xform = UsdGeom.Xformable(prim)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(*base_xyz.tolist()))
+        xform.AddRotateZOp().Set(float(yaw_deg))
 
         _log(f"✅ ArmLoader: {prim_path} loaded at {base_xyz}, yaw={yaw_deg}°")
         return prim_path

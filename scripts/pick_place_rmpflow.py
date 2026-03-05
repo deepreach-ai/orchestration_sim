@@ -11,18 +11,7 @@ Run headless:
   ~/isaacsim/python.sh scripts/pick_place_rmpflow.py --headless
 """
 
-from isaacsim import SimulationApp
-
-import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument("--headless", action="store_true", default=False)
-args, _ = parser.parse_known_args()
-
-simulation_app = SimulationApp({
-    "headless": args.headless,
-    "width": 1280,
-    "height": 720,
-})
+# Import-safe: do not create SimulationApp at import time
 
 # ── stdlib ────────────────────────────────────────────────────────────────────
 import os, time
@@ -325,6 +314,18 @@ class PickPlaceStateMachine:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    import argparse
+    from isaacsim import SimulationApp
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--headless", action="store_true", default=False)
+    args, _ = parser.parse_known_args()
+
+    simulation_app = SimulationApp({
+        "headless": args.headless,
+        "width": 1280,
+        "height": 720,
+    })
+
     world = World(stage_units_in_meters=1.0)
     world.scene.add_default_ground_plane()
 
