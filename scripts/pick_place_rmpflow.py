@@ -44,15 +44,14 @@ URDF_PATH = os.path.join(REPO, "assets/robots/rm75b/rm75b_local.urdf")
 
 # ── Scene constants (DR warehouse spec) ───────────────────────────────────────
 TABLE_H   = 0.40    # confirmed reachable for RM75-B
-BOX_SIZE  = 0.12    # 12cm cube (phone-sized SKU)
+BOX_SIZE  = 0.05    # 5cm cube — fits within gripper jaw span (~8cm opening) (phone-sized SKU)
 BOX_HALF  = BOX_SIZE / 2
 
 # Arm base is at world origin, facing +X
-PICK_XYZ   = np.array([0.30,  0.0,  0.50])   # confirmed IK-reachable
-# PLACE_XYZ: keep original IK-confirmed XY, raise Z to table surface + box half
-# Z=0.47 = TABLE_H(0.40) + BOX_HALF(0.06) + 1cm margin
-PLACE_XYZ  = np.array([0.20, -0.30, 0.47])   # original IK-good XY, corrected Z
-HOVER_Z    = 0.12   # hover height
+# PICK_XYZ Z = TABLE_H(0.40) + BOX_HALF(0.025) + 1cm clearance = 0.435
+PICK_XYZ   = np.array([0.30,  0.0,  0.435])  # Z matches 5cm box centre on table
+PLACE_XYZ  = np.array([0.20, -0.30, 0.435])  # same Z logic for place
+HOVER_Z    = 0.15   # larger hover so arm has a clear top-down approach path
 
 # Joint home position — arm reaching forward over table, not leaning back
 # joint_2 negative = lean forward, joint_4 negative = elbow down
@@ -103,12 +102,14 @@ def build_scene(world: World):
         color=np.array([0.55, 0.35, 0.15]),
     ))
     # Return box (yellow)
+    # Box spawned at table surface: TABLE_H + BOX_HALF
+    box_spawn = np.array([PICK_XYZ[0], PICK_XYZ[1], TABLE_H + BOX_HALF])
     box = world.scene.add(DynamicCuboid(
         prim_path="/World/box", name="box",
-        position=PICK_XYZ.tolist(),
+        position=box_spawn.tolist(),
         size=BOX_SIZE,
         color=np.array([0.95, 0.75, 0.1]),
-        mass=0.25,
+        mass=0.10,
     ))
     # Visual markers for pick/place targets (green/red spheres)
     world.scene.add(VisualSphere(
@@ -138,9 +139,10 @@ class LulaController:
         self._lula    = None
         self._use_lula = False
         # Pre-computed warm starts for key positions (from workspace_scan)
-        self.WARM_PICK  = np.array([ 0.0,   0.23,  0.0,   0.664,  0.0,  1.677,  0.0])
-        # WARM_PLACE: restored to original confirmed-working seed for [0.20,-0.30,*]
-        self.WARM_PLACE = np.array([-0.321, 0.414, -0.446, 1.041, -1.301, 1.271, 0.0])
+        # WARM seeds: J2<0 = lean forward, J4<0 = elbow bent down
+        # This forces upright posture, prevents sideways IK solutions.
+        self.WARM_PICK  = np.array([ 0.0, -0.5,  0.0, -1.0,  0.0,  1.5,  0.0])
+        self.WARM_PLACE = np.array([-0.5, -0.4,  0.0, -1.0,  0.0,  1.5,  0.0])
 
         descriptor_path = os.path.join(REPO, "configs/rm75b_descriptor.yaml")
         try:
@@ -152,11 +154,13 @@ class LulaController:
             # Provide multiple seeds covering pick/place workspace
             # Confirmed reachable from workspace_scan
             seeds = np.array([
-                [ 0.0,  0.23,  0.0,   0.664,  0.0,   1.677,  0.0],  # pick area
-                [-0.321, 0.414, -0.446, 1.041, -1.301, 1.271,  0.0],  # place area
-                [ 0.0, -0.009,  0.0,  -0.439,  0.0,   1.92,   0.0],  # home/up
-                [-0.704, 0.842, -0.163,-0.262, -0.761,  1.958,  0.0],  # left side
-                [ 0.0,   0.5,   0.0,  -1.2,    0.0,   0.8,    0.0],  # forward
+                # All seeds keep J2<0 (lean fwd) and J4<0 (elbow down)
+                # This biases Lula toward upright arm postures only.
+                [ 0.0, -0.5,  0.0, -1.0,  0.0,  1.5,  0.0],  # pick  (upright fwd)
+                [-0.5, -0.4,  0.0, -1.0,  0.0,  1.5,  0.0],  # place (rotated left)
+                [ 0.0, -0.009, 0.0, -0.439, 0.0, 1.92, 0.0],  # home safe
+                [ 0.0, -0.7,  0.0, -0.8,  0.0,  1.2,  0.0],  # reach fwd alt
+                [-0.3, -0.5,  0.0, -1.1,  0.0,  1.4,  0.0],  # left-fwd
             ])
             self._lula.set_default_cspace_seeds(seeds)
             self._use_lula = True
