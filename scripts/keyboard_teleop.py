@@ -3,50 +3,38 @@ scripts/keyboard_teleop.py
 ---------------------------
 Keyboard teleoperation for RM75-B in Isaac Sim + trajectory recording.
 
-Controls (EE Cartesian delta mode)
-------------------------------------
-  W / S      : EE +X / -X  (forward / back)
-  A / D      : EE +Y / -Y  (left / right)
-  Q / E      : EE +Z / -Z  (up / down)
+Keyboard input strategy
+------------------------
+carb.input only works when the Isaac Sim viewport has focus — it cannot
+read terminal keypresses. Instead we run a background thread that reads
+single raw keypresses from stdin using tty/termios (UNIX raw mode).
+
+New concept: raw terminal mode
+-------------------------------
+Normally the terminal buffers input and only sends it to the program when
+you press Enter. In "raw mode" (termios.setraw), every keypress is
+immediately available as a byte, with no Enter required and no echo.
+We restore the original terminal settings on exit with a try/finally.
+
+Controls
+--------
+  W / S      : EE +X / -X
+  A / D      : EE +Y / -Y
+  Q / E      : EE +Z / -Z
   O          : gripper open
-  C          : gripper close
-  R          : start/stop recording
-  P          : print + save trajectory to JSON
+  C          : gripper close / grasp
   H          : move home
-  ESC / Ctrl+C : quit
-
-Trajectory format (saved to logs/trajectory_<timestamp>.json)
---------------------------------------------------------------
-  {
-    "metadata": { "date": ..., "total_steps": ..., "n_waypoints": ... },
-    "waypoints": [
-      { "step": 42, "ee_pos": [x,y,z], "joints": [j1..j7], "gripper": 0.5,
-        "action": "move" },   # action = "move" | "grasp" | "release" | "home"
-      ...
-    ]
-  }
-
-New concepts
-------------
-- Delta Cartesian control: instead of sending absolute targets, each keypress
-  adds a small delta (STEP_SIZE) to the current EE position. This is more
-  intuitive for manual operation.
-
-- Trajectory recording: waypoints are captured at configurable intervals
-  (every RECORD_EVERY sim steps) while recording is active, plus always
-  on gripper open/close events. This gives a compact representation of
-  the motion that can later be replayed or used for imitation learning.
-
-- get_world_pose on link_7: we read the current EE position directly from
-  the prim rather than from IK, so the recorded pose is always ground-truth.
+  R          : start / stop recording
+  P          : save trajectory JSON
+  ESC or X   : quit
 
 Run:
   ~/isaacsim/python.sh scripts/keyboard_teleop.py
-  ~/isaacsim/python.sh scripts/keyboard_teleop.py --headless   # no GUI (testing only)
 """
 
-import os, sys, time, json, argparse, datetime
+import os, sys, time, json, argparse, datetime, threading, queue
 import numpy as np
+import tty, termios
 
 # ── parse args BEFORE SimulationApp ──────────────────────────────────────────
 _parser = argparse.ArgumentParser(add_help=False)
@@ -56,17 +44,12 @@ _args, _ = _parser.parse_known_args()
 from isaacsim import SimulationApp
 simulation_app = SimulationApp({"headless": _args.headless, "width": 1280, "height": 720})
 
-# ── Isaac Sim imports (must follow SimulationApp) ─────────────────────────────
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import DynamicCuboid, FixedCuboid, VisualSphere
 from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.core.utils.rotations import euler_angles_to_quat
-from isaacsim.core.utils.xforms import get_world_pose
 from isaacsim.core.prims import SingleArticulation
 from isaacsim.asset.importer.urdf import _urdf
-import carb.input
-import omni.appwindow
-from pxr import Gf
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 REPO      = os.path.expanduser("~/orchestration_sim")
@@ -74,433 +57,346 @@ URDF_PATH = os.path.join(REPO, "assets/robots/rm75b/rm75b_local.urdf")
 LOG_DIR   = os.path.join(REPO, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# ── Scene constants ───────────────────────────────────────────────────────────
 TABLE_H  = 0.40
-BOX_SIZE = 0.05    # small enough for gripper
+BOX_SIZE = 0.05
 BOX_HALF = BOX_SIZE / 2
 
-PICK_XYZ  = np.array([0.30,  0.0,  TABLE_H + BOX_HALF + 0.01])
-
-# ── Teleop parameters ─────────────────────────────────────────────────────────
-STEP_SIZE     = 0.01   # metres per keypress — smaller = more precise
-RECORD_EVERY  = 30     # record a waypoint every N sim steps while recording
-
-# ── Arm constants (from pick_place_rmpflow) ───────────────────────────────────
 N_ARM_DOFS  = 7
 HOME_JOINTS = np.array([0.0, -0.009, 0.0, -0.439, 0.0, 1.92, 0.0])
 GRIP_OPEN   = np.array([0.5])
 GRIP_CLOSE  = np.array([0.0])
-EE_QUAT     = euler_angles_to_quat(np.array([np.pi, 0.0, 0.0]))
+STEP_SIZE   = 0.01   # metres per keypress
+RECORD_EVERY = 30
 
-# ── Log ───────────────────────────────────────────────────────────────────────
 _logf = open("/tmp/teleop.log", "w", buffering=1)
-def log(msg): _logf.write(msg + "\n"); _logf.flush(); print(msg, flush=True)
+def log(msg): _logf.write(msg+"\n"); _logf.flush(); print(msg, flush=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  LulaController (minimal copy from pick_place_rmpflow)
+#  RawKeyReader — background thread, reads single chars from stdin
+# ─────────────────────────────────────────────────────────────────────────────
+class RawKeyReader:
+    """
+    Reads single keypresses from stdin in a daemon thread.
+    Puts each char (lowercase) into a thread-safe queue.
+    The main sim loop calls .get() each step.
+    """
+    def __init__(self):
+        self._q = queue.Queue()
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True)
+        self._fd = sys.stdin.fileno()
+        self._old = termios.tcgetattr(self._fd)
+
+    def start(self):
+        self._t.start()
+
+    def stop(self):
+        self._stop.set()
+        # Restore terminal
+        try:
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old)
+        except Exception:
+            pass
+
+    def _run(self):
+        try:
+            tty.setraw(self._fd)
+            while not self._stop.is_set():
+                ch = sys.stdin.read(1)
+                if ch:
+                    self._q.put(ch.lower())
+        finally:
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old)
+
+    def get_all(self) -> list:
+        """Drain all pending keypresses this sim step."""
+        keys = []
+        while True:
+            try:
+                keys.append(self._q.get_nowait())
+            except queue.Empty:
+                break
+        return keys
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  LulaController
 # ─────────────────────────────────────────────────────────────────────────────
 class LulaController:
-    def __init__(self, arm: SingleArticulation):
+    def __init__(self, arm: SingleArticulation, arm_prim_path: str):
         self.arm = arm
+        # Store the exact prim path for get_world_pose
+        self._ee_prim = arm_prim_path + "/link_7"
         self._lula = None
         self._attached_box = None
 
-        descriptor_path = os.path.join(REPO, "configs/rm75b_descriptor.yaml")
+        descriptor = os.path.join(REPO, "configs/rm75b_descriptor.yaml")
         try:
             from isaacsim.robot_motion.motion_generation.lula import LulaKinematicsSolver
             self._lula = LulaKinematicsSolver(
-                robot_description_path=descriptor_path,
+                robot_description_path=descriptor,
                 urdf_path=URDF_PATH,
             )
             seeds = np.array([
-                [ 0.0,  0.23,  0.0,   0.664,  0.0,  1.677,  0.0],
-                [-0.321, 0.414, -0.446, 1.041, -1.301, 1.271, 0.0],
-                [ 0.0, -0.009,  0.0,  -0.439,  0.0,  1.92,   0.0],
+                [ 0.0, -0.5,  0.0, -1.0,  0.0,  1.5,  0.0],
+                [-0.5, -0.4,  0.0, -1.0,  0.0,  1.5,  0.0],
+                [ 0.0, -0.009, 0.0, -0.439, 0.0, 1.92, 0.0],
             ])
             self._lula.set_default_cspace_seeds(seeds)
-            log("✅ Lula IK ready")
+            log(f"✅ Lula IK ready  EE prim: {self._ee_prim}")
         except Exception as e:
-            log(f"⚠️  Lula unavailable: {e}")
+            log(f"⚠️  Lula: {e}")
 
-    def move_to(self, target_pos: np.ndarray) -> bool:
-        """Move EE to target_pos (position-only IK)."""
-        if self._lula is None:
-            return False
+    def move_to(self, pos: np.ndarray) -> bool:
+        if self._lula is None: return False
         warm = self.arm.get_joint_positions()[:N_ARM_DOFS]
         try:
             joints, ok = self._lula.compute_inverse_kinematics(
-                frame_name="link_7",
-                warm_start=warm,
-                target_position=target_pos,
-            )
-            self._apply_arm(joints)
+                frame_name="link_7", warm_start=warm, target_position=pos)
+            self._apply(joints)
             return ok
         except Exception as e:
-            log(f"IK error: {e}")
-            return False
+            log(f"IK err: {e}"); return False
 
     def move_home(self):
-        self._apply_arm(HOME_JOINTS)
+        self._apply(HOME_JOINTS)
 
-    def _apply_arm(self, joints):
+    def _apply(self, joints):
         cur = self.arm.get_joint_positions().copy()
         cur[:N_ARM_DOFS] = joints[:N_ARM_DOFS]
         self.arm.apply_action(ArticulationAction(joint_positions=cur))
 
-    def set_gripper(self, pos_arr: np.ndarray):
+    def set_gripper(self, arr: np.ndarray):
         cur = self.arm.get_joint_positions().copy()
         n = cur.shape[0] - N_ARM_DOFS
-        t = pos_arr
-        if t.shape[0] < n: t = np.pad(t, (0, n - t.shape[0]), mode='edge')
+        t = arr
+        if t.shape[0] < n: t = np.pad(t, (0, n-t.shape[0]), mode='edge')
         cur[N_ARM_DOFS:] = t[:n]
         self.arm.apply_action(ArticulationAction(joint_positions=cur))
 
     def get_ee_pos(self) -> np.ndarray:
-        """Return current link_7 world position."""
+        """Read link_7 world position directly from USD stage."""
         try:
-            pos, _ = get_world_pose(self.arm.prim_path + "/link_7")
-            return np.array(pos)
-        except:
+            import omni.usd
+            from pxr import UsdGeom
+            stage = omni.usd.get_context().get_stage()
+            prim  = stage.GetPrimAtPath(self._ee_prim)
+            if not prim.IsValid():
+                log(f"⚠️  EE prim not found: {self._ee_prim}")
+                return np.zeros(3)
+            xform = UsdGeom.Xformable(prim)
+            mat   = xform.ComputeLocalToWorldTransform(0)
+            t     = mat.ExtractTranslation()
+            return np.array([t[0], t[1], t[2]])
+        except Exception as e:
+            log(f"get_ee_pos err: {e}")
             return np.zeros(3)
 
     def get_joints(self) -> np.ndarray:
-        return self.arm.get_joint_positions()[:N_ARM_DOFS]
+        return self.arm.get_joint_positions()[:N_ARM_DOFS].copy()
 
-    def attach_box(self, box): self._attached_box = box
-    def detach_box(self):     self._attached_box = None
+    def attach_box(self, box):
+        self._attached_box = box
+        log("   📦 attach")
+
+    def detach_box(self):
+        self._attached_box = None
+        log("   📦 detach")
 
     def move_box_with_ee(self):
         if self._attached_box is None: return
         try:
-            pos, ori = get_world_pose(self.arm.prim_path + "/link_7")
-            self._attached_box.set_world_pose(position=pos, orientation=ori)
+            pos = self.get_ee_pos()
+            self._attached_box.set_world_pose(position=pos)
         except: pass
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  KeyboardInput — thin wrapper around carb.input
-# ─────────────────────────────────────────────────────────────────────────────
-class KeyboardInput:
-    """
-    New concept: carb.input
-    -----------------------
-    Isaac Sim / Omniverse uses the Carbonite (carb) framework for input.
-    carb.input.IInput lets us query key states directly each sim step,
-    which is better than callbacks for real-time control because:
-    - No threading issues
-    - Key-held detection is natural (just call is_pressed every step)
-    - Works in both GUI and headless modes (headless: all keys report False)
-    """
-    def __init__(self):
-        self._input = carb.input.acquire_input_interface()
-        self._keyboard = omni.appwindow.get_default_app_window().get_keyboard()
-        self._key = carb.input.KeyboardInput
-
-    def pressed(self, key_name: str) -> bool:
-        try:
-            k = getattr(self._key, key_name)
-            return self._input.get_keyboard_value(self._keyboard, k) > 0
-        except:
-            return False
-
-    def any_pressed(self, *key_names) -> bool:
-        return any(self.pressed(k) for k in key_names)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  TrajectoryRecorder
 # ─────────────────────────────────────────────────────────────────────────────
 class TrajectoryRecorder:
-    """
-    Records EE waypoints during teleoperation.
-
-    New concept: Waypoint-based trajectory representation
-    ------------------------------------------------------
-    Instead of recording every single sim step (which would be enormous),
-    we record:
-      1. Periodic samples every RECORD_EVERY steps (background motion)
-      2. Event waypoints on gripper open/close (critical action moments)
-      3. Each waypoint stores: step, EE position, joint angles, gripper state, action tag
-
-    This sparse representation can be:
-      - Replayed by interpolating between waypoints
-      - Used as demonstrations for imitation learning (e.g. ACT, Diffusion Policy)
-      - Converted to a joint-space trajectory for real robot execution
-    """
     def __init__(self):
-        self.waypoints: list = []
-        self.recording: bool = False
-        self._start_step: int = 0
-        self._last_record_step: int = -999
-
-    def start(self, step: int):
-        self.recording = True
-        self._start_step = step
         self.waypoints = []
-        log(f"\n🔴 Recording STARTED at step {step}")
-
-    def stop(self, step: int):
         self.recording = False
-        log(f"⏹  Recording STOPPED at step {step} — {len(self.waypoints)} waypoints")
+        self._last = -999
 
-    def record(self, step: int, ee_pos: np.ndarray, joints: np.ndarray,
-               gripper: float, action: str = "move", force: bool = False):
-        """
-        Add a waypoint. Skips if not enough steps since last record
-        (unless force=True, used for gripper events).
-        """
-        if not self.recording:
-            return
-        if not force and (step - self._last_record_step) < RECORD_EVERY:
-            return
+    def start(self, step):
+        self.recording = True; self.waypoints = []; self._last = -999
+        log(f"\n🔴 REC START  step={step}")
 
+    def stop(self, step):
+        self.recording = False
+        log(f"⏹  REC STOP   step={step}  waypoints={len(self.waypoints)}")
+
+    def record(self, step, ee, joints, grip, action="move", force=False):
+        if not self.recording: return
+        if not force and (step - self._last) < RECORD_EVERY: return
         self.waypoints.append({
-            "step":    step,
-            "ee_pos":  ee_pos.tolist(),
-            "joints":  joints.tolist(),
-            "gripper": float(gripper),
-            "action":  action,
+            "step": step, "ee_pos": ee.tolist(),
+            "joints": joints.tolist(), "gripper": float(grip), "action": action,
         })
-        self._last_record_step = step
+        self._last = step
 
-    def save(self, step: int) -> str:
-        """Save trajectory to JSON. Returns filepath."""
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    def save(self, step) -> str:
+        ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(LOG_DIR, f"trajectory_{ts}.json")
-        data = {
-            "metadata": {
-                "date":        ts,
-                "total_steps": step,
-                "n_waypoints": len(self.waypoints),
-                "step_size_m": STEP_SIZE,
-                "record_every": RECORD_EVERY,
-            },
-            "waypoints": self.waypoints,
-        }
         with open(path, "w") as f:
-            json.dump(data, f, indent=2)
-        log(f"💾 Trajectory saved → {path}  ({len(self.waypoints)} waypoints)")
+            json.dump({"metadata": {"date": ts, "total_steps": step,
+                                    "n_waypoints": len(self.waypoints)},
+                       "waypoints": self.waypoints}, f, indent=2)
+        log(f"💾 Saved → {path}  ({len(self.waypoints)} waypoints)")
         return path
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  TeleopApp — main loop
+#  Main app
 # ─────────────────────────────────────────────────────────────────────────────
-class TeleopApp:
-    def __init__(self):
-        self.world    = World(stage_units_in_meters=1.0)
-        self.kb       = KeyboardInput()
-        self.recorder = TrajectoryRecorder()
-        self.ctrl     = None
-        self.box      = None
+def main():
+    world = World(stage_units_in_meters=1.0)
+    world.scene.add_default_ground_plane()
 
-        self._ee_target   = PICK_XYZ.copy()   # current Cartesian target
-        self._gripper_pos = 0.5               # 0.0=closed, 0.5=open
-        self._is_grasping = False
-        self._step        = 0
+    # Table
+    world.scene.add(FixedCuboid(
+        prim_path="/World/table", name="table",
+        position=[0.35, 0.0, TABLE_H/2], size=1.0,
+        scale=[0.6, 0.6, TABLE_H], color=np.array([0.4,0.4,0.4])))
 
-        # Debounce flags (avoid triggering repeatedly while key held)
-        self._prev = {k: False for k in ["R","P","H","O","C","ESC"]}
+    # Box on table surface
+    box_pos = [0.30, 0.0, TABLE_H + BOX_HALF]
+    box = world.scene.add(DynamicCuboid(
+        prim_path="/World/box", name="box",
+        position=box_pos, size=BOX_SIZE,
+        color=np.array([0.95,0.75,0.1]), mass=0.05))
 
-    def setup(self):
-        self.world.scene.add_default_ground_plane()
+    # Load URDF
+    ui  = _urdf.acquire_urdf_interface()
+    cfg = _urdf.ImportConfig()
+    cfg.merge_fixed_joints             = False
+    cfg.fix_base                       = True
+    cfg.default_drive_type             = _urdf.UrdfJointTargetType.JOINT_DRIVE_POSITION
+    cfg.default_drive_strength         = 8e3
+    cfg.default_position_drive_damping = 8e2
+    asset_root = os.path.dirname(URDF_PATH)
+    asset_name = os.path.basename(URDF_PATH)
+    robot = ui.parse_urdf(asset_root, asset_name, cfg)
+    ui.import_robot("", asset_name, robot, cfg, "/RM75_B_with_Gripper")
 
-        # Pick table
-        self.world.scene.add(FixedCuboid(
-            prim_path="/World/table", name="table",
-            position=[0.40, 0.0, TABLE_H / 2],
-            size=1.0, scale=[0.6, 0.6, TABLE_H],
-            color=np.array([0.4, 0.4, 0.4]),
-        ))
+    world.reset()
+    world.step(render=False)
 
-        # Box (small, grippable)
-        self.box = self.world.scene.add(DynamicCuboid(
-            prim_path="/World/box", name="box",
-            position=PICK_XYZ.tolist(),
-            size=BOX_SIZE,
-            color=np.array([0.95, 0.75, 0.1]),
-            mass=0.1,
-        ))
+    arm = SingleArticulation(prim_path="/RM75_B_with_Gripper")
+    world.step(render=False)
+    arm.initialize()
+    log(f"✅ Arm DOFs={arm.num_dof}  prim={arm.prim_path}")
 
-        # EE target marker (blue sphere)
-        self.world.scene.add(VisualSphere(
-            prim_path="/World/target_marker", name="target_marker",
-            position=self._ee_target.tolist(),
-            radius=0.015, color=np.array([0.1, 0.4, 1.0]),
-        ))
+    ctrl = LulaController(arm, arm.prim_path)
+    ctrl.move_home()
+    world.step(render=False)
 
-        # Load arm
-        ui = _urdf.acquire_urdf_interface()
-        cfg = _urdf.ImportConfig()
-        cfg.merge_fixed_joints             = False
-        cfg.fix_base                       = True
-        cfg.default_drive_type             = _urdf.UrdfJointTargetType.JOINT_DRIVE_POSITION
-        cfg.default_drive_strength         = 8e3
-        cfg.default_position_drive_damping = 8e2
-        asset_root = os.path.dirname(URDF_PATH)
-        asset_name = os.path.basename(URDF_PATH)
-        robot = ui.parse_urdf(asset_root, asset_name, cfg)
-        prim  = "/RM75_B_with_Gripper"
-        ui.import_robot("", asset_name, robot, cfg, prim)
+    # Initialise EE target from actual home pose
+    ee_target = ctrl.get_ee_pos().copy()
+    log(f"   Initial EE pos: {np.round(ee_target, 3)}")
 
-        self.world.reset()
-        self.world.step(render=False)
+    rec   = TrajectoryRecorder()
+    kb    = RawKeyReader()
+    grip  = 0.5   # current gripper state
+    step  = 0
+    quit_ = False
 
-        arm = SingleArticulation(prim_path=prim)
-        self.world.step(render=False)
-        arm.initialize()
-        log(f"✅ Arm ready — DOFs: {arm.num_dof}")
+    WORKSPACE_LO = np.array([-0.70, -0.70, 0.05])
+    WORKSPACE_HI = np.array([ 0.70,  0.70, 1.10])
 
-        self.ctrl = LulaController(arm)
-        self.ctrl.move_home()
-
-        # Initialise EE target from actual home EE position
-        self._ee_target = self.ctrl.get_ee_pos().copy()
-
-        self._print_help()
-
-    def _print_help(self):
-        log("""
-╔══════════════════════════════════════════════════════════╗
-║            RM75-B Keyboard Teleop + Recorder             ║
-╠══════════════════════════════════════════════════════════╣
-║  W/S   → EE +X/-X (forward/back)                        ║
-║  A/D   → EE +Y/-Y (left/right)                          ║
-║  Q/E   → EE +Z/-Z (up/down)                             ║
-║  O     → gripper open                                   ║
-║  C     → gripper close  (grasp)                         ║
-║  H     → move home                                      ║
-║  R     → start / stop recording                         ║
-║  P     → save trajectory to JSON                        ║
-║  ESC   → quit                                           ║
-╚══════════════════════════════════════════════════════════╝
+    log("""
+╔══════════════════════════════════════════════╗
+║       RM75-B Keyboard Teleop (stdin mode)    ║
+╠══════════════════════════════════════════════╣
+║  W/S  → EE +X/-X    A/D  → EE +Y/-Y         ║
+║  Q/E  → EE +Z/-Z                            ║
+║  O    → gripper open                        ║
+║  C    → gripper close / grasp               ║
+║  H    → home                                ║
+║  R    → start/stop recording                ║
+║  P    → save trajectory JSON                ║
+║  X or ESC → quit                            ║
+╠══════════════════════════════════════════════╣
+║  Click THIS TERMINAL window to type!        ║
+╚══════════════════════════════════════════════╝
 """)
 
-    def _debounce(self, key: str) -> bool:
-        """Returns True only on the rising edge of a key press."""
-        cur = self.kb.pressed(key)
-        rose = cur and not self._prev[key]
-        self._prev[key] = cur
-        return rose
+    kb.start()
 
-    def _update_target_marker(self):
-        """Move the blue sphere to track _ee_target."""
-        try:
-            from isaacsim.core.utils.xforms import set_prim_position
-            set_prim_position("/World/target_marker", self._ee_target)
-        except: pass
+    try:
+        while simulation_app.is_running() and not quit_:
+            world.step(render=not _args.headless)
+            ctrl.move_box_with_ee()
 
-    def run(self):
-        log("\n🚀 Teleop running — see controls above\n")
-        MAX_STEPS = 200_000
+            # ── Process all keypresses queued this step ───────────────────
+            moved = False
+            for ch in kb.get_all():
+                if   ch == 'w': ee_target[0] += STEP_SIZE; moved = True
+                elif ch == 's': ee_target[0] -= STEP_SIZE; moved = True
+                elif ch == 'a': ee_target[1] += STEP_SIZE; moved = True
+                elif ch == 'd': ee_target[1] -= STEP_SIZE; moved = True
+                elif ch == 'q': ee_target[2] += STEP_SIZE; moved = True
+                elif ch == 'e': ee_target[2] -= STEP_SIZE; moved = True
 
-        while simulation_app.is_running() and self._step < MAX_STEPS:
-            self.world.step(render=not _args.headless)
-            self._handle_input()
-            self.ctrl.move_box_with_ee()
-            self._step += 1
+                elif ch == 'o':
+                    grip = 0.5; ctrl.set_gripper(GRIP_OPEN)
+                    ctrl.detach_box()
+                    log(f"  [{step}] gripper OPEN")
+                    rec.record(step, ctrl.get_ee_pos(), ctrl.get_joints(),
+                               grip, "release", force=True)
 
-            if self._step % 120 == 0:
-                ee = self.ctrl.get_ee_pos()
-                rec = "🔴REC" if self.recorder.recording else "   "
-                log(f"[{self._step:>6}] {rec} EE={np.round(ee,3)}  "
-                    f"grip={'CLOSE' if self._gripper_pos < 0.1 else 'open '}  "
-                    f"waypoints={len(self.recorder.waypoints)}")
+                elif ch == 'c':
+                    grip = 0.0; ctrl.set_gripper(GRIP_CLOSE)
+                    ee  = ctrl.get_ee_pos()
+                    bp  = np.array(box.get_world_pose()[0])
+                    dist = np.linalg.norm(ee - bp)
+                    if dist < 0.15:
+                        ctrl.attach_box(box)
+                        log(f"  [{step}] GRASP ✅  dist={dist:.3f}m")
+                    else:
+                        log(f"  [{step}] gripper CLOSE (box far: {dist:.3f}m)")
+                    rec.record(step, ctrl.get_ee_pos(), ctrl.get_joints(),
+                               grip, "grasp", force=True)
 
-    def _handle_input(self):
-        step = self._step
-        moved = False
+                elif ch == 'h':
+                    ctrl.move_home()
+                    ee_target = ctrl.get_ee_pos().copy()
+                    log(f"  [{step}] HOME  EE={np.round(ee_target,3)}")
 
-        # ── EE delta movement ────────────────────────────────────────────────
-        if self.kb.pressed("W"): self._ee_target[0] += STEP_SIZE; moved = True
-        if self.kb.pressed("S"): self._ee_target[0] -= STEP_SIZE; moved = True
-        if self.kb.pressed("A"): self._ee_target[1] += STEP_SIZE; moved = True
-        if self.kb.pressed("D"): self._ee_target[1] -= STEP_SIZE; moved = True
-        if self.kb.pressed("Q"): self._ee_target[2] += STEP_SIZE; moved = True
-        if self.kb.pressed("E"): self._ee_target[2] -= STEP_SIZE; moved = True
+                elif ch == 'r':
+                    if rec.recording: rec.stop(step)
+                    else:             rec.start(step)
 
-        if moved:
-            # Clamp to workspace limits (from rm75b.yaml)
-            self._ee_target = np.clip(
-                self._ee_target,
-                [-0.70, -0.70, 0.05],
-                [ 0.70,  0.70, 1.10],
-            )
-            self.ctrl.move_to(self._ee_target)
-            self._update_target_marker()
-            # Record motion waypoint
-            self.recorder.record(
-                step, self.ctrl.get_ee_pos(), self.ctrl.get_joints(),
-                self._gripper_pos, action="move",
-            )
+                elif ch == 'p':
+                    if rec.waypoints: rec.save(step)
+                    else: log("  ⚠️  No waypoints — press R first")
 
-        # ── Gripper open (O) ─────────────────────────────────────────────────
-        if self._debounce("O"):
-            self._gripper_pos = 0.5
-            self.ctrl.set_gripper(GRIP_OPEN)
-            self._is_grasping = False
-            self.ctrl.detach_box()
-            log(f"  [{step}] Gripper OPEN")
-            self.recorder.record(
-                step, self.ctrl.get_ee_pos(), self.ctrl.get_joints(),
-                self._gripper_pos, action="release", force=True,
-            )
+                elif ch in ('x', '\x1b'):   # ESC = \x1b
+                    log("\n👋 Quit")
+                    if rec.waypoints: rec.save(step)
+                    quit_ = True; break
 
-        # ── Gripper close / grasp (C) ────────────────────────────────────────
-        if self._debounce("C"):
-            self._gripper_pos = 0.0
-            self.ctrl.set_gripper(GRIP_CLOSE)
-            # Check if box is close to EE → attach
-            ee = self.ctrl.get_ee_pos()
-            box_pos = self.box.get_world_pose()[0]
-            dist = np.linalg.norm(ee - np.array(box_pos))
-            if dist < 0.12:
-                self.ctrl.attach_box(self.box)
-                self._is_grasping = True
-                log(f"  [{step}] Gripper CLOSE + GRASP (dist={dist:.3f}m)")
-            else:
-                log(f"  [{step}] Gripper CLOSE (box too far: {dist:.3f}m)")
-            self.recorder.record(
-                step, self.ctrl.get_ee_pos(), self.ctrl.get_joints(),
-                self._gripper_pos, action="grasp", force=True,
-            )
+            if moved:
+                ee_target = np.clip(ee_target, WORKSPACE_LO, WORKSPACE_HI)
+                ctrl.move_to(ee_target)
+                rec.record(step, ctrl.get_ee_pos(), ctrl.get_joints(),
+                           grip, "move")
 
-        # ── Home (H) ─────────────────────────────────────────────────────────
-        if self._debounce("H"):
-            self.ctrl.move_home()
-            self._ee_target = self.ctrl.get_ee_pos().copy()
-            log(f"  [{step}] HOME")
-            self.recorder.record(
-                step, self.ctrl.get_ee_pos(), self.ctrl.get_joints(),
-                self._gripper_pos, action="home", force=True,
-            )
+            if step % 120 == 0:
+                ee = ctrl.get_ee_pos()
+                r  = "🔴" if rec.recording else "  "
+                log(f"[{step:>6}] {r} EE={np.round(ee,3)}  "
+                    f"grip={'CLOSE' if grip<0.1 else 'open '}  "
+                    f"wp={len(rec.waypoints)}")
+            step += 1
 
-        # ── Record toggle (R) ────────────────────────────────────────────────
-        if self._debounce("R"):
-            if self.recorder.recording:
-                self.recorder.stop(step)
-            else:
-                self.recorder.start(step)
-
-        # ── Save (P) ─────────────────────────────────────────────────────────
-        if self._debounce("P"):
-            if self.recorder.waypoints:
-                self.recorder.save(step)
-            else:
-                log("  ⚠️  No waypoints recorded yet — press R to start recording first")
-
-        # ── Quit (ESC) ───────────────────────────────────────────────────────
-        if self._debounce("ESC"):
-            log("\n👋 ESC pressed — saving and quitting...")
-            if self.recorder.waypoints:
-                self.recorder.save(step)
-            simulation_app.close()
+    finally:
+        kb.stop()
+        simulation_app.close()
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    app = TeleopApp()
-    app.setup()
-    app.run()
-    simulation_app.close()
+    main()
