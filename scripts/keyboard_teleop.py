@@ -124,11 +124,37 @@ class RawKeyReader:
 #  LulaController
 # ─────────────────────────────────────────────────────────────────────────────
 class LulaController:
+
+    @staticmethod
+    def _find_ee_prim(root_path: str, link_name: str) -> str:
+        """
+        BFS the USD stage from root_path to find the prim named link_name.
+        URDF import nests links under auto-generated joint prims, so the
+        exact depth is unpredictable — we search instead of hardcoding.
+        """
+        import omni.usd
+        from collections import deque
+        stage = omni.usd.get_context().get_stage()
+        root  = stage.GetPrimAtPath(root_path)
+        if not root.IsValid():
+            log(f"⚠️  root prim not found: {root_path}")
+            return root_path + "/" + link_name
+        q = deque([root])
+        while q:
+            p = q.popleft()
+            if p.GetName() == link_name:
+                found = str(p.GetPath())
+                log(f"✅ EE prim auto-found: {found}")
+                return found
+            for child in p.GetChildren():
+                q.append(child)
+        log(f"⚠️  '{link_name}' not found under {root_path}")
+        return root_path + "/" + link_name
+
     def __init__(self, arm: SingleArticulation, arm_prim_path: str):
-        self.arm = arm
-        # Store the exact prim path for get_world_pose
-        self._ee_prim = arm_prim_path + "/link_7"
-        self._lula = None
+        self.arm          = arm
+        self._ee_prim     = self._find_ee_prim(arm_prim_path, "link_7")
+        self._lula        = None
         self._attached_box = None
 
         descriptor = os.path.join(REPO, "configs/rm75b_descriptor.yaml")
