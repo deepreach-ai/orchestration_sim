@@ -49,7 +49,10 @@ BOX_HALF  = BOX_SIZE / 2
 
 # Arm base is at world origin, facing +X
 PICK_XYZ   = np.array([0.30,  0.0,  0.50])   # confirmed IK-reachable
-PLACE_XYZ  = np.array([0.20, -0.30, 0.50])   # left side reachable
+# PLACE_XYZ: Z=0.47 = TABLE_H(0.40) + BOX_HALF(0.06) + small margin(0.01)
+# This ensures box centre is just above the place table when released.
+# X=0.45 aligns with the place_table centre (see build_scene).
+PLACE_XYZ  = np.array([0.45, -0.45, 0.47])   # centred over place_table
 HOVER_Z    = 0.12   # hover height
 
 # Joint home position — arm reaching forward over table, not leaning back
@@ -136,8 +139,10 @@ class LulaController:
         self._lula    = None
         self._use_lula = False
         # Pre-computed warm starts for key positions (from workspace_scan)
-        self.WARM_PICK  = np.array([ 0.0,  0.23,  0.0,  0.664,  0.0,  1.677,  0.0])
-        self.WARM_PLACE = np.array([-0.321,  0.414, -0.446,  1.041, -1.301,  1.271,  0.0])
+        self.WARM_PICK  = np.array([ 0.0,   0.23,  0.0,   0.664,  0.0,  1.677,  0.0])
+        # WARM_PLACE updated for new PLACE_XYZ=[0.45,-0.45,0.47]:
+        # joint_1 rotated ~-45deg to reach -Y side of workspace
+        self.WARM_PLACE = np.array([-0.785, 0.50, 0.0, -0.80, 0.0, 1.30, 0.0])
 
         descriptor_path = os.path.join(REPO, "configs/rm75b_descriptor.yaml")
         try:
