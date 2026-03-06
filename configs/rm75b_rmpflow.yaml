@@ -1,71 +1,94 @@
 # RM75-B RMPflow 配置文件
-# 供 isaacsim.robot_motion.motion_generation.RmpFlow 使用
-# Isaac Sim 5.1.0 格式
+# 正确格式参考 Isaac Sim 官方 Cobotta/UR10 配置
+# 关键：joint_limit_buffers 数量必须等于 cspace DOF 数（7个）
 
-# 标识符（必填，固定值）
-collection: rmpflow
+joint_limit_buffers: [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
 
-# 末端执行器目标吸引参数
-# accel_p_gain: 位置比例增益（越大越快到达，可能过冲）
-# accel_d_gain: 速度阻尼（越大越稳定，越慢）
-ee_target:
-  accel_p_gain: 50.0
-  accel_d_gain: 14.0
+rmp_params:
+  # c-space target RMP：null space 吸引力
+  # 这是解决侧翻的核心——当 EE 位置可以被多种姿态达到时，
+  # RMPflow 会在 null space 里把臂拉向这里设定的 default_q（upright posture）
+  # 在 rm75b_descriptor.yaml 里 default_q 已经设为直立姿态
+  cspace_target_rmp:
+    metric_scalar: 50.0
+    position_gain: 100.0
+    damping_gain: 50.0
+    robust_position_term_thresh: 0.5
+    inertia: 1.0
 
-# 关节空间阻尼（防止无目标时漂移/抖动）
-joint_limit_avoidance_weight: 0.1
-null_space_joint_weight: 0.1
+  # c-space 轨迹跟踪
+  cspace_trajectory_rmp:
+    p_gain: 100.0
+    d_gain: 10.0
+    ff_gain: 0.25
+    weight: 50.0
 
-# 碰撞避让参数
-# ignore_robot_state_updates: false → 每 step 更新机器人状态
-cspace_barriers:
-  weight: 1.0
-  buffer: 0.05   # 关节极限缓冲区（rad），进入此区域开始减速
+  # 关节极限排斥
+  joint_limit_rmp:
+    metric_scalar: 1000.0
+    metric_length_scale: 0.01
+    metric_exploder_eps: 1.0e-3
+    metric_velocity_gate_length_scale: 0.01
+    accel_damper_gain: 200.0
+    accel_potential_gain: 1.0
+    accel_potential_exploder_length_scale: 0.1
+    accel_potential_exploder_eps: 1.0e-2
 
-# 自碰撞避让球体（与 descriptor 保持一致）
-# RMPflow 用这些球体计算排斥力场
-robot_sphere_collection:
-  - link: base_link
-    spheres:
-      - center: [0, 0, 0.12]
-        radius: 0.08
-  - link: link_1
-    spheres:
-      - center: [0, 0, 0.0]
-        radius: 0.07
-      - center: [0, -0.06, 0.0]
-        radius: 0.06
-  - link: link_2
-    spheres:
-      - center: [0, -0.07, 0.0]
-        radius: 0.06
-      - center: [0, -0.15, 0.0]
-        radius: 0.055
-      - center: [0, -0.22, 0.0]
-        radius: 0.055
-  - link: link_3
-    spheres:
-      - center: [0, 0, 0.0]
-        radius: 0.055
-      - center: [0, -0.06, 0.0]
-        radius: 0.05
-  - link: link_4
-    spheres:
-      - center: [0, -0.07, 0.0]
-        radius: 0.05
-      - center: [0, -0.14, 0.0]
-        radius: 0.045
-  - link: link_5
-    spheres:
-      - center: [0, 0, 0.0]
-        radius: 0.045
-  - link: link_6
-    spheres:
-      - center: [0, -0.04, 0.0]
-        radius: 0.04
-      - center: [0, -0.10, 0.0]
-        radius: 0.04
-  - link: link_7
-    spheres:
-      - center: [0, 0, -0.02]
-        radius: 0.035
+  # 关节速度上限（rad/s）
+  joint_velocity_cap_rmp:
+    max_velocity: 1.5
+    velocity_damping_region: 0.3
+    damping_gain: 1000.0
+    metric_weight: 100.0
+
+  # EE 位置吸引力场
+  target_rmp:
+    accel_p_gain: 60.0
+    accel_d_gain: 16.0
+    accel_norm_eps: 0.075
+    metric_weight: 50.0
+    min_metric_alpha: 0.01
+    max_metric_scalar: 10000.0
+    min_metric_scalar: 1.0
+    proximity_metric_boost_scalar: 20.0
+    proximity_metric_boost_length_scalar: 0.5
+    metric_alpha_length_scale: 0.8
+    inertia: 1.0
+
+  # EE 朝向对齐（axis target）— 这是保持夹爪朝下的关键
+  axis_target_rmp:
+    accel_p_gain: 180.0
+    accel_d_gain: 30.0
+    metric_weight: 10.0
+    inertia: 1.0
+
+  # 阻尼（减少抖动）
+  damping_rmp:
+    accel_d_gain: 30.0
+    metric_weight: 50.0
+    accel_norm_eps: 0.02
+    inertia: 0.0
+
+  # 自碰撞避让球体
+  body_collision_controllers:
+    - frame: base_link
+      radius: 0.08
+      offset: [0.0, 0.0, 0.12]
+    - frame: link_2
+      radius: 0.06
+      offset: [0.0, -0.07, 0.0]
+    - frame: link_4
+      radius: 0.05
+      offset: [0.0, -0.10, 0.0]
+    - frame: link_6
+      radius: 0.04
+      offset: [0.0, -0.07, 0.0]
+    - frame: link_7
+      radius: 0.035
+      offset: [0.0, 0.0, -0.02]
+
+  # 机器人底座圆柱体（防止臂撞底座）
+  body_cylinders:
+    - pos1: [0.0, 0.0, 0.0]
+      pos2: [0.0, 0.0, 0.25]
+      radius: 0.10

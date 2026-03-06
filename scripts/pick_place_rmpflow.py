@@ -189,18 +189,22 @@ class RMPflowController:
         try:
             from isaacsim.robot_motion.motion_generation import RmpFlow, ArticulationMotionPolicy
             self._rmpflow = RmpFlow(
-                robot_description_path = DESCRIPTOR_PATH,
-                urdf_path              = URDF_PATH,
-                rmpflow_config_path    = self._get_rmpflow_config(),
+                robot_description_path  = DESCRIPTOR_PATH,
+                urdf_path               = URDF_PATH,
+                rmpflow_config_path     = self._get_rmpflow_config(),
                 end_effector_frame_name = "link_7",
-                maximum_substep_size   = 0.0034,   # 仿真步长匹配
+                maximum_substep_size    = 0.00334,  # 1/60 / 5 substeps
             )
             self._policy = ArticulationMotionPolicy(
                 robot_articulation = self.arm,
                 motion_policy      = self._rmpflow,
                 default_physics_dt = 1.0 / 60.0,
             )
-            log("✅ RMPflow 初始化成功")
+            # ── Null space attractor：让 RMPflow 在冗余空间里偏向直立姿态 ──
+            # 这是防止侧翻的核心：当 EE 位置可以被多种关节构型达到时，
+            # RMPflow 会在 null space 里把臂拉向 HOME_JOINTS（直立）
+            self._rmpflow.set_cspace_attractor(HOME_JOINTS)
+            log("✅ RMPflow 初始化成功，null space attractor = HOME_JOINTS")
         except Exception as e:
             log(f"⚠️  RMPflow 初始化失败: {e}")
             log("   → 回退到 Lula IK")
@@ -300,13 +304,14 @@ collision_avoidance:
                 frame_name="link_7", warm_start=warm, target_position=pos)
             self._apply_joints(j)
 
-    def step(self):
+    def step(self, physics_dt: float = 1.0/60.0):
         """
-        每个仿真 step 调用一次。
-        RMPflow 会根据当前状态和目标计算下一步关节位置。
+        每个仿真 step 调用一次，传入物理时间步长。
+        get_next_articulation_action(step) 必须传 dt，否则 RMPflow
+        内部积分器无法正确计算速度，会产生抖动或错误姿态。
         """
         if self._policy is not None:
-            action = self._policy.get_next_articulation_action()
+            action = self._policy.get_next_articulation_action(physics_dt)
             if action is not None:
                 self.arm.apply_action(action)
 
