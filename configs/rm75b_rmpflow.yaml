@@ -1,0 +1,71 @@
+# RM75-B RMPflow 配置文件
+# 供 isaacsim.robot_motion.motion_generation.RmpFlow 使用
+# Isaac Sim 5.1.0 格式
+
+# 标识符（必填，固定值）
+collection: rmpflow
+
+# 末端执行器目标吸引参数
+# accel_p_gain: 位置比例增益（越大越快到达，可能过冲）
+# accel_d_gain: 速度阻尼（越大越稳定，越慢）
+ee_target:
+  accel_p_gain: 50.0
+  accel_d_gain: 14.0
+
+# 关节空间阻尼（防止无目标时漂移/抖动）
+joint_limit_avoidance_weight: 0.1
+null_space_joint_weight: 0.1
+
+# 碰撞避让参数
+# ignore_robot_state_updates: false → 每 step 更新机器人状态
+cspace_barriers:
+  weight: 1.0
+  buffer: 0.05   # 关节极限缓冲区（rad），进入此区域开始减速
+
+# 自碰撞避让球体（与 descriptor 保持一致）
+# RMPflow 用这些球体计算排斥力场
+robot_sphere_collection:
+  - link: base_link
+    spheres:
+      - center: [0, 0, 0.12]
+        radius: 0.08
+  - link: link_1
+    spheres:
+      - center: [0, 0, 0.0]
+        radius: 0.07
+      - center: [0, -0.06, 0.0]
+        radius: 0.06
+  - link: link_2
+    spheres:
+      - center: [0, -0.07, 0.0]
+        radius: 0.06
+      - center: [0, -0.15, 0.0]
+        radius: 0.055
+      - center: [0, -0.22, 0.0]
+        radius: 0.055
+  - link: link_3
+    spheres:
+      - center: [0, 0, 0.0]
+        radius: 0.055
+      - center: [0, -0.06, 0.0]
+        radius: 0.05
+  - link: link_4
+    spheres:
+      - center: [0, -0.07, 0.0]
+        radius: 0.05
+      - center: [0, -0.14, 0.0]
+        radius: 0.045
+  - link: link_5
+    spheres:
+      - center: [0, 0, 0.0]
+        radius: 0.045
+  - link: link_6
+    spheres:
+      - center: [0, -0.04, 0.0]
+        radius: 0.04
+      - center: [0, -0.10, 0.0]
+        radius: 0.04
+  - link: link_7
+    spheres:
+      - center: [0, 0, -0.02]
+        radius: 0.035
