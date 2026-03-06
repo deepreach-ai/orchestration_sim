@@ -49,10 +49,9 @@ BOX_HALF  = BOX_SIZE / 2
 
 # Arm base is at world origin, facing +X
 PICK_XYZ   = np.array([0.30,  0.0,  0.50])   # confirmed IK-reachable
-# PLACE_XYZ: Z=0.47 = TABLE_H(0.40) + BOX_HALF(0.06) + small margin(0.01)
-# This ensures box centre is just above the place table when released.
-# X=0.45 aligns with the place_table centre (see build_scene).
-PLACE_XYZ  = np.array([0.45, -0.45, 0.47])   # centred over place_table
+# PLACE_XYZ: keep original IK-confirmed XY, raise Z to table surface + box half
+# Z=0.47 = TABLE_H(0.40) + BOX_HALF(0.06) + 1cm margin
+PLACE_XYZ  = np.array([0.20, -0.30, 0.47])   # original IK-good XY, corrected Z
 HOVER_Z    = 0.12   # hover height
 
 # Joint home position — arm reaching forward over table, not leaning back
@@ -140,9 +139,8 @@ class LulaController:
         self._use_lula = False
         # Pre-computed warm starts for key positions (from workspace_scan)
         self.WARM_PICK  = np.array([ 0.0,   0.23,  0.0,   0.664,  0.0,  1.677,  0.0])
-        # WARM_PLACE updated for new PLACE_XYZ=[0.45,-0.45,0.47]:
-        # joint_1 rotated ~-45deg to reach -Y side of workspace
-        self.WARM_PLACE = np.array([-0.785, 0.50, 0.0, -0.80, 0.0, 1.30, 0.0])
+        # WARM_PLACE: restored to original confirmed-working seed for [0.20,-0.30,*]
+        self.WARM_PLACE = np.array([-0.321, 0.414, -0.446, 1.041, -1.301, 1.271, 0.0])
 
         descriptor_path = os.path.join(REPO, "configs/rm75b_descriptor.yaml")
         try:
@@ -198,42 +196,34 @@ class LulaController:
         self.arm.apply_action(action)
 
     def attach_box(self, box_prim_path: str):
-        """Rigidly attach box to end-effector (simulate grasp)."""
-        try:
-            from omni.physx.scripts import utils as physx_utils
-            stage = omni.usd.get_context().get_stage()
-            ee_path = self.arm.prim_path + "/link_7"
-            physx_utils.setRigidBodyEnabled(stage.GetPrimAtPath(box_prim_path), False)
-            log(f"   📦 Box attached to EE (physics disabled)")
-            self._attached_box = box_prim_path
-            self._box_local_offset = None
-        except Exception as e:
-            log(f"   attach error: {e}")
+        """
+        Mark box as attached. Physics-free approach: we teleport the box
+        every step in move_box_with_ee instead of toggling PhysX rigid body.
+        This avoids physx_utils import issues and is more stable in Isaac Sim 5.x.
+        """
+        self._attached_box = box_prim_path
+        log(f"   📦 Box attached (teleport mode): {box_prim_path}")
 
     def detach_box(self):
-        """Release box from end-effector."""
-        try:
-            from omni.physx.scripts import utils as physx_utils
-            stage = omni.usd.get_context().get_stage()
-            if hasattr(self, '_attached_box') and self._attached_box:
-                physx_utils.setRigidBodyEnabled(stage.GetPrimAtPath(self._attached_box), True)
-                log(f"   📦 Box detached (physics re-enabled)")
-                self._attached_box = None
-        except Exception as e:
-            log(f"   detach error: {e}")
+        """Unmark box — physics will take over from current teleported position."""
+        if hasattr(self, '_attached_box') and self._attached_box:
+            log(f"   📦 Box detached: {self._attached_box}")
+        self._attached_box = None
 
     def move_box_with_ee(self, box):
-        """If box is attached, teleport it to current EE position."""
-        if hasattr(self, '_attached_box') and self._attached_box:
-            try:
-                stage = omni.usd.get_context().get_stage()
-                from isaacsim.core.utils.xforms import get_world_pose
-                # get EE world position
-                ee_prim_path = self.arm.prim_path + "/link_7"
-                pos, _ = get_world_pose(ee_prim_path)
-                box.set_world_pose(position=pos)
-            except Exception as e:
-                pass
+        """
+        Teleport box to EE (link_7) world position every sim step.
+        Uses get_world_pose on the link_7 prim — no physx_utils needed.
+        """
+        if not (hasattr(self, '_attached_box') and self._attached_box):
+            return
+        try:
+            from isaacsim.core.utils.xforms import get_world_pose
+            ee_prim_path = self.arm.prim_path + "/link_7"
+            pos, ori = get_world_pose(ee_prim_path)
+            box.set_world_pose(position=pos, orientation=ori)
+        except Exception as e:
+            log(f"   move_box_with_ee error: {e}")
 
     def set_gripper(self, closed: bool):
         current = self.arm.get_joint_positions()
