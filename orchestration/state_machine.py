@@ -47,8 +47,11 @@ PLACE_XYZ   = np.array([0.20, -0.30, 0.50])
 HOVER_Z     = 0.12
 HOME_JOINTS = np.array([0.0, -0.009, 0.0, -0.439, 0.0, 1.92, 0.0])
 N_ARM_DOFS  = 7
-GRIP_OPEN   = np.array([0.04,  0.04,  0.04,  0.04])
-GRIP_CLOSE  = np.array([0.003, 0.003, 0.003, 0.003])
+# Gripper: only Left_1_Joint is revolute (±0.5 rad).
+# All other gripper joints are fixed (mimic removed for PhysX compat).
+# Full open = +0.5 rad, fully closed = 0.0 rad.
+GRIP_OPEN   = np.array([0.5])
+GRIP_CLOSE  = np.array([0.0])
 
 
 # ── Logger (writes to Isaac Sim-safe logger, not stdout) ─────────────────────

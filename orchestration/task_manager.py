@@ -86,7 +86,9 @@ BOX_MASS    = 0.25   # kg
 #
 # Both arms face +X. Placed on opposite sides of handover zone.
 # 750 mm reach → safe pick at x=+0.30 from base.
-ARM_A_BASE_XYZ  = np.array([ 0.45,  0.50,  0.0])
+# ARM_A Y reduced 0.50→0.30: brings it closer to Handover zone
+# (0.673m → 0.54m), well within 750mm reach sweet spot.
+ARM_A_BASE_XYZ  = np.array([ 0.45,  0.30,  0.0])
 ARM_B_BASE_XYZ  = np.array([-0.30, -0.50,  0.0])
 
 # ── Key task positions (world frame) ─────────────────────────────────────────

@@ -11,13 +11,20 @@ Run headless:
   ~/isaacsim/python.sh scripts/pick_place_rmpflow.py --headless
 """
 
-# Import-safe: do not create SimulationApp at import time
-
-# ── stdlib ────────────────────────────────────────────────────────────────────
-import os, time
+# ── stdlib (safe to import before SimulationApp) ─────────────────────────────
+import os, sys, time, argparse
 import numpy as np
 
-# ── Isaac Sim 5.1.0 ───────────────────────────────────────────────────────────
+# ── Boot Isaac Sim FIRST — Carbonite requires SimulationApp before any isaacsim.*
+# parse --headless early so SimulationApp gets the right config
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--headless", action="store_true", default=False)
+_args, _ = _parser.parse_known_args()
+
+from isaacsim import SimulationApp
+simulation_app = SimulationApp({"headless": _args.headless, "width": 1280, "height": 720})
+
+# ── Isaac Sim 5.1.0 — all imports AFTER SimulationApp() ──────────────────────
 from isaacsim.core.api             import World
 from isaacsim.core.api.objects     import DynamicCuboid, FixedCuboid, VisualSphere
 from isaacsim.core.utils.types     import ArticulationAction
@@ -51,8 +58,11 @@ HOME_JOINTS = np.array([0.0, -0.009, 0.0, -0.439, 0.0, 1.92, 0.0])  # straight u
 
 # Gripper: 13 DOFs total (7 arm + 6 gripper fingers)
 N_ARM_DOFS = 7
-GRIP_OPEN  = np.array([ 0.04,  0.04,  0.04,  0.04])
-GRIP_CLOSE = np.array([ 0.003, 0.003, 0.003, 0.003])
+# Gripper: only Left_1_Joint is revolute (±0.5 rad).
+# All other gripper joints are fixed (mimic removed for PhysX compat).
+# Full open = +0.5 rad, fully closed = 0.0 rad.
+GRIP_OPEN  = np.array([0.5])
+GRIP_CLOSE = np.array([0.0])
 
 
 # ── URDF loader ───────────────────────────────────────────────────────────────
@@ -321,18 +331,7 @@ class PickPlaceStateMachine:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    import argparse
-    from isaacsim import SimulationApp
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--headless", action="store_true", default=False)
-    args, _ = parser.parse_known_args()
-
-    simulation_app = SimulationApp({
-        "headless": args.headless,
-        "width": 1280,
-        "height": 720,
-    })
-
+    # simulation_app already created at module level (Carbonite requirement)
     world = World(stage_units_in_meters=1.0)
     world.scene.add_default_ground_plane()
 
@@ -360,7 +359,7 @@ def main():
     t0         = time.time()
 
     while simulation_app.is_running() and step < MAX_STEPS and not done:
-        world.step(render=not args.headless)
+        world.step(render=not _args.headless)
 
         if step % 60 == 0:
             box_pos = box.get_world_pose()[0]
@@ -382,7 +381,7 @@ def main():
     log(f"\n{'✅ PASS' if done else '❌ FAIL (timeout)'} — pick_place_rmpflow")
     log("────────────────────────────────────────────────────────────\n")
 
-    if not args.headless:
+    if not _args.headless:
         log("   GUI open — close window to exit")
         while simulation_app.is_running():
             world.step(render=True)
